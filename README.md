@@ -4,8 +4,8 @@ A hosted watcher for Amazon hourly warehouse jobs in **Oakley, California** and 
 California**, with urgent alerts for Flex Time / FlexPT / Flexible Shifts schedules.
 
 It checks Amazon's official hourly hiring feed every five minutes, detects new matching schedules,
-stores what it has already reported, and sends an ntfy push notification to an iPhone. It never logs
-in, fills out an application, or applies automatically.
+stores what it has already reported, and sends a Telegram or ntfy push notification to an iPhone. It
+never logs in, fills out an application, or applies automatically.
 
 ## Notification contents
 
@@ -30,7 +30,7 @@ Cloudflare Cron Trigger (every 5 minutes)
   -> exact city/state + warehouse keyword filters
   -> job details and selectable schedules
   -> compare with Durable Object seen-schedule state
-  -> ntfy push to iPhone
+  -> Telegram (preferred) or ntfy push to iPhone
   -> persist successfully delivered schedule IDs
 
 GitHub
@@ -41,12 +41,27 @@ Cloudflare is the continuous runtime because Amazon currently blocks GitHub-host
 the hourly hiring feed. A live Cloudflare egress test confirmed that the official feed is reachable
 from the Worker runtime. The Worker uses web-platform APIs and has no production dependencies.
 
-## iPhone setup with ntfy
+## iPhone setup with Telegram (recommended)
+
+Telegram is the reliable free option for Cloudflare Workers because bot quotas are not pooled by the
+Worker's shared outbound IP.
+
+1. Install Telegram on the iPhone.
+2. Open the verified **@BotFather** chat and send `/newbot`.
+3. Follow its prompts, then copy the bot token it returns.
+4. Open the new bot's chat and send `/start` once.
+5. Add the token to Cloudflare with `npx wrangler secret put TELEGRAM_BOT_TOKEN`.
+6. Obtain the numeric chat ID from the bot's `getUpdates` response and save it with
+   `npx wrangler secret put TELEGRAM_CHAT_ID`.
+
+When both Telegram secrets exist, the Worker automatically uses Telegram. Notifications include an
+**Apply now** button that opens the exact Amazon job and schedule.
+
+## Alternative iPhone setup with ntfy
 
 1. Install [ntfy from the iOS App Store](https://apps.apple.com/us/app/ntfy/id1625396347).
 2. Create a free account at [ntfy.sh/app](https://ntfy.sh/app), then create an access token under
-   **Account -> Access tokens**. Authentication avoids anonymous quotas tied to Cloudflare's shared
-   outbound addresses; a paid ntfy plan is not needed for this watcher's normal traffic.
+   **Account -> Access tokens**.
 3. Create a long, hard-to-guess topic, such as `amazon-oakley-vacaville-` followed by a UUID.
    A topic on public `ntfy.sh` acts like a password: anyone who knows it can subscribe.
 4. Subscribe to that exact topic in the ntfy app and allow notifications.
@@ -73,8 +88,9 @@ npx wrangler secret put NTFY_TOKEN
 ```
 
 Paste the exact values when prompted. The access token is strongly recommended for hosted
-`ntfy.sh`; without it, Cloudflare's shared egress can encounter an anonymous daily quota even when
-this watcher has sent very few messages. Optional secret:
+`ntfy.sh`. Be aware that ntfy's free hosted limits may still be pooled by source IP; Cloudflare's
+shared egress can therefore encounter a daily quota even when this watcher has sent very few
+messages. Use Telegram if that happens. Optional secret:
 
 ```bash
 # Enables the protected manual POST /run endpoint

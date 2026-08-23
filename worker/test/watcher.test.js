@@ -7,7 +7,11 @@ import {
   cardMatches,
   isPreferred,
 } from "../src/amazon.js";
-import { directApplicationUrl, formatNotification } from "../src/notification.js";
+import {
+  directApplicationUrl,
+  formatNotification,
+  sendNotification,
+} from "../src/notification.js";
 
 test("calls the runtime fetch function without rebinding its receiver", async () => {
   const originalFetch = globalThis.fetch;
@@ -99,4 +103,40 @@ test("groups multiple schedules into one concise message", () => {
   assert.match(message, /2 new selectable schedules/);
   assert.match(message, /Morning/);
   assert.match(message, /Night/);
+});
+
+test("prefers Telegram when its secrets are configured", async () => {
+  const originalFetch = globalThis.fetch;
+  let requestedUrl = "";
+  let requestedBody;
+  globalThis.fetch = async (url, options) => {
+    requestedUrl = String(url);
+    requestedBody = JSON.parse(options.body);
+    return Response.json({ ok: true });
+  };
+  try {
+    const opportunities = buildOpportunities(
+      {
+        jobId: "JOB-US-123",
+        jobTitle: "Warehouse Associate",
+        city: "Vacaville",
+        state: "CA",
+        locationName: "Vacaville, CA",
+      },
+      {},
+      [{ scheduleId: "SCH-1", scheduleType: "FLEX", scheduleText: "Flexible Shifts" }],
+      new Date("2026-08-23T19:30:00Z"),
+    );
+    await sendNotification(
+      { TELEGRAM_BOT_TOKEN: "test-token", TELEGRAM_CHAT_ID: "12345" },
+      opportunities,
+      true,
+    );
+    assert.match(requestedUrl, /api\.telegram\.org\/bottest-token\/sendMessage/);
+    assert.equal(requestedBody.chat_id, "12345");
+    assert.match(requestedBody.text, /AMAZON FLEX JOB AVAILABLE/);
+    assert.match(requestedBody.reply_markup.inline_keyboard[0][0].url, /scheduleId=SCH-1/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

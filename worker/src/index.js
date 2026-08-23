@@ -1,6 +1,6 @@
 import { AmazonHourlyClient, buildOpportunities, cardMatches, isPreferred } from "./amazon.js";
 import { WATCH_CONFIG } from "./config.js";
-import { sendNtfy } from "./notification.js";
+import { sendNotification } from "./notification.js";
 
 const STATE_ID = "oakley-vacaville-amazon-watcher";
 const LEASE_KEY = "run:lease";
@@ -132,7 +132,7 @@ export class WatcherState {
     const byJob = Map.groupBy(unseen, (item) => item.jobId);
     let notifications = 0;
     for (const jobOpportunities of byJob.values()) {
-      await sendNtfy(
+      await sendNotification(
         this.env,
         jobOpportunities,
         jobOpportunities.some((item) => isPreferred(item)),

@@ -84,3 +84,38 @@ export async function sendNtfy(env, opportunities, preferred) {
   }
 }
 
+export async function sendTelegram(env, opportunities, preferred) {
+  if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_CHAT_ID) {
+    throw new Error("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID secrets are required");
+  }
+  const first = opportunities[0];
+  const applicationUrl = directApplicationUrl(first);
+  const title = preferred ? "AMAZON FLEX JOB AVAILABLE" : "AMAZON WAREHOUSE JOB AVAILABLE";
+  const response = await fetch(
+    `https://api.telegram.org/bot${encodeURIComponent(env.TELEGRAM_BOT_TOKEN)}/sendMessage`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: env.TELEGRAM_CHAT_ID,
+        text: `${title}\n\n${formatNotification(opportunities)}`,
+        disable_web_page_preview: true,
+        reply_markup: {
+          inline_keyboard: [[{ text: "Apply now", url: applicationUrl }]],
+        },
+      }),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(
+      `Telegram returned HTTP ${response.status}: ${(await response.text()).slice(0, 500)}`,
+    );
+  }
+}
+
+export async function sendNotification(env, opportunities, preferred) {
+  if (env.TELEGRAM_BOT_TOKEN || env.TELEGRAM_CHAT_ID) {
+    return sendTelegram(env, opportunities, preferred);
+  }
+  return sendNtfy(env, opportunities, preferred);
+}
