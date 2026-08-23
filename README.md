@@ -44,10 +44,13 @@ from the Worker runtime. The Worker uses web-platform APIs and has no production
 ## iPhone setup with ntfy
 
 1. Install [ntfy from the iOS App Store](https://apps.apple.com/us/app/ntfy/id1625396347).
-2. Create a long, hard-to-guess topic, such as `amazon-oakley-vacaville-` followed by a UUID.
+2. Create a free account at [ntfy.sh/app](https://ntfy.sh/app), then create an access token under
+   **Account -> Access tokens**. Authentication avoids anonymous quotas tied to Cloudflare's shared
+   outbound addresses; a paid ntfy plan is not needed for this watcher's normal traffic.
+3. Create a long, hard-to-guess topic, such as `amazon-oakley-vacaville-` followed by a UUID.
    A topic on public `ntfy.sh` acts like a password: anyone who knows it can subscribe.
-3. Subscribe to that exact topic in the ntfy app and allow notifications.
-4. Keep the topic handy for the Cloudflare secret setup below.
+4. Subscribe to that exact topic in the ntfy app and allow notifications.
+5. Keep the topic and access token handy for the Cloudflare secret setup below.
 
 ## Deploy to Cloudflare
 
@@ -62,18 +65,18 @@ npx wrangler whoami
 `wrangler login` opens Cloudflare's OAuth page. `whoami` must show the intended account before any
 deployment.
 
-Add the ntfy topic as an encrypted Worker secret:
+Add the ntfy topic and access token as encrypted Worker secrets:
 
 ```bash
 npx wrangler secret put NTFY_TOPIC
+npx wrangler secret put NTFY_TOKEN
 ```
 
-Paste the exact topic when prompted. Optional secrets:
+Paste the exact values when prompted. The access token is strongly recommended for hosted
+`ntfy.sh`; without it, Cloudflare's shared egress can encounter an anonymous daily quota even when
+this watcher has sent very few messages. Optional secret:
 
 ```bash
-# Only when a private/self-hosted ntfy server requires a bearer token
-npx wrangler secret put NTFY_TOKEN
-
 # Enables the protected manual POST /run endpoint
 npx wrangler secret put WATCHER_TOKEN
 ```
@@ -234,4 +237,3 @@ timestamp; pushes include that date and the watcher's precise detection time.
 
 This project is independent and is not affiliated with or endorsed by Amazon, Cloudflare, or ntfy.
 Use it responsibly and follow the applicable site and service terms.
-

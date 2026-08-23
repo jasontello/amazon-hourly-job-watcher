@@ -1,8 +1,32 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildOpportunities, cardMatches, isPreferred } from "../src/amazon.js";
+import {
+  AmazonHourlyClient,
+  buildOpportunities,
+  cardMatches,
+  isPreferred,
+} from "../src/amazon.js";
 import { directApplicationUrl, formatNotification } from "../src/notification.js";
+
+test("calls the runtime fetch function without rebinding its receiver", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = function runtimeFetch() {
+    assert.equal(this, undefined);
+    return Promise.resolve(Response.json({ data: { ok: true } }));
+  };
+  try {
+    const client = new AmazonHourlyClient({
+      amazonApiUrl: "https://example.test/graphql",
+      minimumRequestIntervalMs: 0,
+      requestTimeoutMs: 1_000,
+      retryAttempts: 1,
+    });
+    assert.deepEqual(await client.post("test", "query test { ok }", {}), { ok: true });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 
 test("matches target warehouse roles only", () => {
   assert.equal(
@@ -76,4 +100,3 @@ test("groups multiple schedules into one concise message", () => {
   assert.match(message, /Morning/);
   assert.match(message, /Night/);
 });
-

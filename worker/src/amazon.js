@@ -32,7 +32,7 @@ query searchScheduleCards($searchScheduleRequest: SearchScheduleRequest!) {
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 export class AmazonHourlyClient {
-  constructor(config = WATCH_CONFIG, fetchImplementation = fetch) {
+  constructor(config = WATCH_CONFIG, fetchImplementation = (...args) => fetch(...args)) {
     this.config = config;
     this.fetchImplementation = fetchImplementation;
     this.lastRequestAt = 0;
@@ -238,4 +238,3 @@ export function isPreferred(opportunity, config = WATCH_CONFIG) {
     .toLocaleLowerCase("en-US");
   return config.preferredShiftKeywords.some((keyword) => searchable.includes(keyword));
 }
-
