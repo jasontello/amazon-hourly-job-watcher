@@ -3,6 +3,9 @@
 A hosted watcher for Amazon hourly warehouse jobs in **Oakley, California** and **Vacaville,
 California**, with urgent alerts for Flex Time / FlexPT / Flexible Shifts schedules.
 
+> **Production status:** paused. The Cloudflare cron trigger is disabled because the position was
+> filled successfully. The Worker and saved state remain available for future reactivation.
+
 It checks Amazon's official hourly hiring feed every five minutes, detects new matching schedules,
 stores what it has already reported, and sends a Telegram or ntfy push notification to an iPhone. It
 never logs in, fills out an application, or applies automatically.
@@ -236,11 +239,13 @@ eligible accounts. If an account is not eligible for the free Durable Objects/Cr
 Cloudflare will show the plan requirement before deployment; do not upgrade without reviewing the
 current price.
 
-To change the interval, edit [`wrangler.jsonc`](wrangler.jsonc):
+To reactivate the watcher, edit [`wrangler.jsonc`](wrangler.jsonc):
 
 ```jsonc
 "triggers": { "crons": ["*/10 * * * *"] }
 ```
+
+Then run `npm run deploy`. To pause it again, set `"crons": []` and redeploy.
 
 Do not poll more often than every five minutes. Cron execution can drift slightly, so this is
 near-real-time rather than a hard real-time guarantee.
