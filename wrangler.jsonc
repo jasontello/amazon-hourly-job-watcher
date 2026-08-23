@@ -1,0 +1,32 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "amazon-hourly-job-watcher",
+  "main": "worker/src/index.js",
+  "compatibility_date": "2026-08-23",
+  "workers_dev": true,
+  "vars": {
+    "NTFY_SERVER": "https://ntfy.sh"
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "WATCHER_STATE",
+        "class_name": "WatcherState"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["WatcherState"]
+    }
+  ],
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+}
+

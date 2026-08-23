@@ -1,13 +1,13 @@
 # Amazon Hourly Job Watcher
 
-A lightweight, hosted watcher for Amazon hourly warehouse jobs in **Oakley, California** and
-**Vacaville, California**, with extra urgency for Flex Time / FlexPT / Flexible Shifts schedules.
+A hosted watcher for Amazon hourly warehouse jobs in **Oakley, California** and **Vacaville,
+California**, with urgent alerts for Flex Time / FlexPT / Flexible Shifts schedules.
 
 It checks Amazon's official hourly hiring feed every five minutes, detects new matching schedules,
-stores what it has already reported, and sends an ntfy push notification to an iPhone. It never
-logs in, fills out an application, or applies automatically.
+stores what it has already reported, and sends an ntfy push notification to an iPhone. It never logs
+in, fills out an application, or applies automatically.
 
-## What the notification contains
+## Notification contents
 
 - Job title and location
 - Shift type and exact schedule text
@@ -15,61 +15,111 @@ logs in, fills out an application, or applies automatically.
 - Hourly pay when Amazon lists it
 - Amazon's posting date and the exact detection time
 - First-day date when available
-- A direct official Amazon application link with the job and schedule preselected
+- A direct official Amazon application URL with the job and schedule preselected
 
-When one posting contains several new schedules, the watcher groups them into one notification to
-avoid alert spam. It still stores each schedule ID separately, so a Flex schedule added later to an
-existing posting creates a fresh alert.
+When one posting contains several new schedules, the watcher groups them into one push to avoid alert
+spam. It stores each schedule ID separately, so a Flex schedule added later to an existing posting
+creates a fresh alert.
 
 ## Architecture
 
 ```text
-GitHub Actions (every 5 minutes)
+Cloudflare Cron Trigger (every 5 minutes)
+  -> one strongly consistent Durable Object
   -> Amazon official hourly-jobs GraphQL feed
   -> exact city/state + warehouse keyword filters
-  -> job details and selectable schedule details
-  -> compare schedule IDs with state/seen_jobs.json
+  -> job details and selectable schedules
+  -> compare with Durable Object seen-schedule state
   -> ntfy push to iPhone
-  -> commit newly seen schedule IDs back to the repository
+  -> persist successfully delivered schedule IDs
+
+GitHub
+  -> source control + Python/Node tests + Worker bundle validation
 ```
 
-The project uses only the Python standard library. There are no servers, databases, package installs,
-browser automation, or paid dependencies.
+Cloudflare is the continuous runtime because Amazon currently blocks GitHub-hosted runner IPs from
+the hourly hiring feed. A live Cloudflare egress test confirmed that the official feed is reachable
+from the Worker runtime. The Worker uses web-platform APIs and has no production dependencies.
 
 ## iPhone setup with ntfy
 
 1. Install [ntfy from the iOS App Store](https://apps.apple.com/us/app/ntfy/id1625396347).
 2. Create a long, hard-to-guess topic, such as `amazon-oakley-vacaville-` followed by a UUID.
-   A topic on the public `ntfy.sh` server works like a password: anyone who knows it can subscribe.
+   A topic on public `ntfy.sh` acts like a password: anyone who knows it can subscribe.
 3. Subscribe to that exact topic in the ntfy app and allow notifications.
-4. In this GitHub repository, open **Settings -> Secrets and variables -> Actions**.
-5. Add a repository secret named `NTFY_TOPIC` containing the topic.
-6. Optional: add `NTFY_SERVER` if using a server other than `https://ntfy.sh`.
-7. Optional: add `NTFY_TOKEN` if the chosen ntfy server requires a bearer token.
+4. Keep the topic handy for the Cloudflare secret setup below.
 
-The scheduled workflow safely skips live checks until `NTFY_TOPIC` exists, so an unconfigured fork
-does not fail every five minutes.
+## Deploy to Cloudflare
 
-### Send a test push
-
-From a local terminal:
+Requirements: Node.js 20 or newer and a Cloudflare account.
 
 ```bash
-export NTFY_TOPIC='your-long-random-topic'
-python3 -m amazon_job_watcher --test-notification
+npm install
+npx wrangler login
+npx wrangler whoami
 ```
 
-Or open **Actions -> Watch Amazon hourly jobs -> Run workflow** after adding the secret. A normal
-manual run performs a real check and sends current unseen matches.
+`wrangler login` opens Cloudflare's OAuth page. `whoami` must show the intended account before any
+deployment.
+
+Add the ntfy topic as an encrypted Worker secret:
+
+```bash
+npx wrangler secret put NTFY_TOPIC
+```
+
+Paste the exact topic when prompted. Optional secrets:
+
+```bash
+# Only when a private/self-hosted ntfy server requires a bearer token
+npx wrangler secret put NTFY_TOKEN
+
+# Enables the protected manual POST /run endpoint
+npx wrangler secret put WATCHER_TOKEN
+```
+
+Deploy the Worker and its five-minute cron trigger:
+
+```bash
+npm run deploy
+```
+
+The first deployment creates the SQLite-backed Durable Object automatically. Cron changes can take
+up to 15 minutes to propagate globally.
+
+### Verify production
+
+The deploy command prints a `workers.dev` URL. Check its health endpoint:
+
+```bash
+curl https://amazon-hourly-job-watcher.<your-subdomain>.workers.dev/health
+```
+
+Stream logs while a cron runs:
+
+```bash
+npm run tail
+```
+
+If `WATCHER_TOKEN` is configured, trigger an immediate check:
+
+```bash
+curl -X POST \
+  -H 'Authorization: Bearer YOUR_WATCHER_TOKEN' \
+  https://amazon-hourly-job-watcher.<your-subdomain>.workers.dev/run
+```
+
+The root endpoint and `/health` expose only service status. `/run` is disabled unless its secret is
+set and rejects requests without the exact bearer token.
 
 ## First-run behavior
 
-By default, the first live run notifies you about matching jobs that are already open. That is useful
-because an existing opening is still actionable.
+The first live run notifies you about matching jobs already open. That is intentional: an existing
+opening is still actionable. After ntfy accepts a push, the Worker records all schedules included in
+that notification.
 
-To start with a silent baseline instead, open **Actions -> Watch Amazon hourly jobs -> Run workflow**,
-enable **Record current matches without sending notifications**, and run it once before adding the
-ntfy topic. The workflow writes those schedule IDs to the state file without sending pushes.
+If a notification fails, those schedule IDs are not marked delivered, so the next cron retries. If a
+later schedule is added to an old job posting, only that unseen schedule triggers a new push.
 
 ## Change locations or keywords
 
@@ -98,76 +148,90 @@ Edit [`config.json`](config.json):
 }
 ```
 
-Location matching is exact and case-insensitive. A job must match one configured city/state pair and
-one `include_keywords` entry. Preferred shift keywords do not exclude other warehouse jobs; they make
-matching Flex alerts use ntfy's **urgent** priority instead of **high**.
+The Worker and local Python CLI share this one config file. Location matching is exact and
+case-insensitive. A job must match one configured city/state pair and one `include_keywords` entry.
+Preferred shift keywords do not exclude other warehouse jobs; they set matching Flex pushes to
+ntfy's **urgent** priority instead of **high**.
 
-Commit and push the config change. The next scheduled run uses it automatically.
-
-## Run locally
-
-Requires Python 3.11 or newer.
+After a config change:
 
 ```bash
+npm test
+npm run deploy
+```
+
+## Test and run locally
+
+The repository includes Worker unit tests and an independent Python 3.11+ CLI for live dry runs.
+
+```bash
+npm test
+npx wrangler deploy --dry-run
 python3 -m unittest discover -s tests -v
 python3 -m amazon_job_watcher --dry-run
 ```
 
-`--dry-run` queries Amazon and prints unseen matches as JSON. It does not send a push or modify the
-seen-state file.
+The Python `--dry-run` queries Amazon and prints unseen matches as JSON. It does not send a push or
+modify `state/seen_jobs.json`.
 
-Other commands:
+Additional local Python commands:
 
 ```bash
-# Record current matches without notifying
+# Send one sample push
+NTFY_TOPIC='your-topic' python3 -m amazon_job_watcher --test-notification
+
+# Record current local matches without notifying
 python3 -m amazon_job_watcher --baseline
 
 # Use another configuration file
 python3 -m amazon_job_watcher --config path/to/config.json --dry-run
 ```
 
+The local Python state file is separate from Cloudflare production state.
+
 ## Reliability and safety
 
-- **Deduplication:** keyed by Amazon schedule ID and persisted in Git.
-- **Crash-safe writes:** state is written to a temporary file, synced, and atomically replaced.
-- **Delivery ordering:** an item is marked seen only after ntfy accepts the notification.
-- **Partial-failure safety:** each successfully delivered job batch is saved immediately.
+- **Strongly consistent coordination:** every cron targets one Durable Object, with a transactional
+  run lease to prevent overlapping or duplicate cron executions.
+- **Schedule-level deduplication:** successful deliveries are keyed by Amazon schedule ID.
+- **Grouped pushes:** all new schedules for one job become one notification.
+- **Delivery ordering:** schedules are stored only after ntfy returns success.
 - **Retries:** transient network errors, HTTP 403/408/429, and server errors use bounded exponential
   backoff with jitter.
-- **Rate limiting:** Amazon requests are spaced by at least one second and only matching job cards
-  trigger detail/schedule requests.
-- **Schema checks:** unexpected API response shapes fail loudly instead of silently recording bad data.
-- **Concurrency:** GitHub Actions allows only one watcher run at a time.
-- **Secrets:** the ntfy topic/token live in GitHub Actions secrets, never in source control or logs.
-- **No auto-apply:** the program only reads public listings and sends links.
+- **Rate limiting:** Amazon requests are spaced by at least one second; only matching cards trigger
+  detail and schedule calls.
+- **Schema checks:** unexpected API responses fail loudly without corrupting deduplication state.
+- **Timeouts:** every Amazon request has an abort timeout, and the cron records its last error.
+- **Retention:** delivered schedule records expire after 365 days.
+- **Secrets:** ntfy and manual-trigger credentials are encrypted Worker secrets, never source code.
+- **No auto-apply:** the program reads public listings and sends official links only.
 
-Logs are available under the repository's **Actions** tab. If Amazon changes its feed, the run fails
-and preserves the previous seen state so a repaired run can alert normally.
+Worker observability is enabled in [`wrangler.jsonc`](wrangler.jsonc), and `/health` returns the last
+run's status and counts. Positions can fill between detection and opening the application URL.
 
-## Hosting cost and timing
+## Cost and timing
 
-The five-minute cron is the shortest schedule interval GitHub Actions supports. Scheduled runs can be
-delayed during high load, so this is near-real-time rather than a hard real-time guarantee.
+The Worker runs every five minutes, a deliberately conservative rate. Cloudflare's free Workers,
+Cron Triggers, and Durable Objects allowances are sufficient for this small personal workload on
+eligible accounts. If an account is not eligible for the free Durable Objects/Cron allowance,
+Cloudflare will show the plan requirement before deployment; do not upgrade without reviewing the
+current price.
 
-Standard GitHub-hosted runners are free for public repositories. Private repositories consume the
-account's included Actions minutes; at a five-minute cadence that can exceed the monthly allowance.
-For a private repository, either change the cron to every 15-30 minutes or monitor billing.
+To change the interval, edit [`wrangler.jsonc`](wrangler.jsonc):
 
-To change the interval, edit [`.github/workflows/watch-jobs.yml`](.github/workflows/watch-jobs.yml):
-
-```yaml
-- cron: "*/10 * * * *" # every 10 minutes
+```jsonc
+"triggers": { "crons": ["*/10 * * * *"] }
 ```
 
-Do not poll more often than every five minutes. The one-second internal request spacing is intentional.
+Do not poll more often than every five minutes. Cron execution can drift slightly, so this is
+near-real-time rather than a hard real-time guarantee.
 
 ## Data source and limitations
 
-The watcher uses `https://hiring.amazon.com/graphql`, the same structured hourly-job and schedule feed
-used by Amazon's official hiring site. Amazon currently reports the posting **date**, not a precise
-posting timestamp; notifications therefore include both that date and the watcher's precise detection
-time. Positions can fill between detection and opening the link.
+The watcher uses `https://hiring.amazon.com/graphql`, the structured hourly-job and schedule feed used
+by Amazon's official hiring site. Amazon currently reports a posting **date**, not a precise posting
+timestamp; pushes include that date and the watcher's precise detection time.
 
-This project is independent and is not affiliated with or endorsed by Amazon or ntfy. Use it responsibly
-and follow the applicable site and service terms.
+This project is independent and is not affiliated with or endorsed by Amazon, Cloudflare, or ntfy.
+Use it responsibly and follow the applicable site and service terms.
 

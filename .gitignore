@@ -5,5 +5,8 @@ __pycache__/
 .DS_Store
 .env
 .venv/
+node_modules/
+.wrangler/
+.dev.vars
+.dev.vars.*
 work/
-

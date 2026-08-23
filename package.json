@@ -1,0 +1,16 @@
+{
+  "name": "amazon-hourly-job-watcher-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test worker/test/*.test.js",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev --test-scheduled",
+    "tail": "wrangler tail"
+  },
+  "devDependencies": {
+    "wrangler": "4.125.0"
+  }
+}
+
