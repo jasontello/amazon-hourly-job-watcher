@@ -1,0 +1,40 @@
+{
+  "locations": [
+    {
+      "city": "Oakley",
+      "state": "CA"
+    },
+    {
+      "city": "Vacaville",
+      "state": "CA"
+    }
+  ],
+  "include_keywords": [
+    "warehouse",
+    "fulfillment center",
+    "sortation center",
+    "delivery station",
+    "package sorter"
+  ],
+  "preferred_shift_keywords": [
+    "flex_time",
+    "flex time",
+    "flexible shifts",
+    "flexpt",
+    "flex pt"
+  ],
+  "timezone": "America/Los_Angeles",
+  "api": {
+    "url": "https://hiring.amazon.com/graphql",
+    "page_size": 100,
+    "max_pages": 10,
+    "request_timeout_seconds": 30,
+    "minimum_request_interval_seconds": 1.0,
+    "retry_attempts": 4
+  },
+  "state": {
+    "path": "state/seen_jobs.json",
+    "retention_days": 365
+  }
+}
+
