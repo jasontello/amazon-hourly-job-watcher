@@ -193,7 +193,13 @@ class DiscordNotifier:
         request = urllib.request.Request(
             f"{self.webhook_url}{query_separator}wait=true",
             data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": (
+                    "AmazonJobWatcher/1.0 "
+                    "(+https://github.com/jasontello/amazon-hourly-job-watcher)"
+                ),
+            },
             method="POST",
         )
         try:

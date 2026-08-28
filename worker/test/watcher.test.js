@@ -245,9 +245,11 @@ test("uses a Discord webhook as the preferred notification provider", async () =
   const originalFetch = globalThis.fetch;
   let requestedUrl = "";
   let requestedBody;
+  let requestedHeaders;
   globalThis.fetch = async (url, options) => {
     requestedUrl = String(url);
     requestedBody = JSON.parse(options.body);
+    requestedHeaders = options.headers;
     return Response.json({ id: "message-123" });
   };
   try {
@@ -267,6 +269,7 @@ test("uses a Discord webhook as the preferred notification provider", async () =
     assert.match(requestedBody.embeds[0].description, /other-job days available/i);
     assert.match(requestedBody.embeds[0].url, /scheduleId=SCH-US-456/);
     assert.deepEqual(requestedBody.allowed_mentions, { parse: [] });
+    assert.match(requestedHeaders["User-Agent"], /AmazonJobWatcher/);
   } finally {
     globalThis.fetch = originalFetch;
   }

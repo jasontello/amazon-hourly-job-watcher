@@ -131,7 +131,10 @@ export async function sendDiscord(env, opportunities, preferred) {
   const withoutApplyLine = separator >= 0 ? description.slice(0, separator) : description;
   const response = await fetch(`${webhookUrl}?wait=true`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "User-Agent": "AmazonJobWatcher/1.0 (+https://github.com/jasontello/amazon-hourly-job-watcher)",
+    },
     body: JSON.stringify({
       username: "Amazon Job Watcher",
       content: `**${title} — ${first.profileLabel}**`,
