@@ -11,9 +11,9 @@ It reads Amazon's official hourly hiring feed, evaluates every selectable schedu
 which schedules were already delivered, and pushes new matches to an iPhone. It never signs in,
 fills an application, or applies automatically.
 
-> **Production status:** the updated Worker is deployed, but its recurring cron remains paused
-> until a private Discord webhook is configured and tested. The existing ntfy credentials remain
-> installed, but ntfy has rate-limited Cloudflare's shared outbound IP in production.
+> **Production status:** active. The Worker checks every five minutes and sends direct-mention
+> alerts to the verified private Discord channel. The existing ntfy credentials remain installed
+> as a fallback, but ntfy previously rate-limited Cloudflare's shared outbound IP.
 
 ## Matching rules
 
@@ -123,20 +123,20 @@ npm run deploy
 `whoami` must show the intended Cloudflare account before deployment. The first deployment creates
 the SQLite-backed Durable Object automatically.
 
-The current [`wrangler.jsonc`](wrangler.jsonc) intentionally contains:
-
-```jsonc
-"triggers": { "crons": [] }
-```
-
-After Discord is tested successfully, reactivate five-minute checks by changing it to:
+The current [`wrangler.jsonc`](wrangler.jsonc) enables five-minute checks:
 
 ```jsonc
 "triggers": { "crons": ["*/5 * * * *"] }
 ```
 
-Then deploy again. Cron changes can take up to 15 minutes to propagate globally. To stop the
-watcher later, restore the empty list and redeploy.
+To pause automatic checks, change it to:
+
+```jsonc
+"triggers": { "crons": [] }
+```
+
+Then deploy again. Cron changes can take up to 15 minutes to propagate globally. Restore the
+five-minute expression and redeploy to reactivate it.
 
 ## Verify production
 
