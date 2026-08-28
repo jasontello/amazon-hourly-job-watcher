@@ -241,11 +241,22 @@ class NotificationTests(unittest.TestCase):
             DiscordNotifier("https://example.com/webhooks/not-discord")
 
     def test_discord_notifier_accepts_the_official_endpoint(self) -> None:
-        notifier = DiscordNotifier("https://discord.com/api/webhooks/123456/secret-token")
+        notifier = DiscordNotifier(
+            "https://discord.com/api/webhooks/123456/secret-token",
+            "377516438161850391",
+        )
         self.assertEqual(
             notifier.webhook_url,
             "https://discord.com/api/webhooks/123456/secret-token",
         )
+        self.assertEqual(notifier.user_id, "377516438161850391")
+
+    def test_discord_notifier_rejects_an_invalid_user_id(self) -> None:
+        with self.assertRaisesRegex(ValueError, "17-20 digit Discord user ID"):
+            DiscordNotifier(
+                "https://discord.com/api/webhooks/123456/secret-token",
+                "not-a-user",
+            )
 
 
 if __name__ == "__main__":

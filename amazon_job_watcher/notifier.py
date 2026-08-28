@@ -137,8 +137,11 @@ class NtfyNotifier:
 
 
 class DiscordNotifier:
-    def __init__(self, webhook_url: str, timeout: float = 20) -> None:
+    def __init__(
+        self, webhook_url: str, user_id: str | None = None, timeout: float = 20
+    ) -> None:
         self.webhook_url = webhook_url.strip()
+        self.user_id = (user_id or "").strip()
         self.timeout = timeout
         parsed = urllib.parse.urlparse(self.webhook_url)
         allowed_hosts = {
@@ -153,10 +156,15 @@ class DiscordNotifier:
             or not parsed.path.startswith("/api/webhooks/")
         ):
             raise ValueError("DISCORD_WEBHOOK_URL must be an official Discord HTTPS webhook URL")
+        if self.user_id and (not self.user_id.isdigit() or not 17 <= len(self.user_id) <= 20):
+            raise ValueError("DISCORD_USER_ID must be a 17-20 digit Discord user ID")
 
     @classmethod
     def from_environment(cls) -> "DiscordNotifier":
-        return cls(os.environ.get("DISCORD_WEBHOOK_URL", ""))
+        return cls(
+            os.environ.get("DISCORD_WEBHOOK_URL", ""),
+            os.environ.get("DISCORD_USER_ID"),
+        )
 
     def send(self, opportunity: Opportunity, preferred: bool) -> None:
         self.send_many([opportunity], preferred=preferred)
@@ -172,7 +180,10 @@ class DiscordNotifier:
         title = "Preferred Amazon day job" if preferred else "Amazon day-shift job available"
         payload = {
             "username": "Amazon Job Watcher",
-            "content": f"**{title} — {first.profile_label}**",
+            "content": (
+                f"{'<@' + self.user_id + '> ' if self.user_id else ''}"
+                f"**{title} — {first.profile_label}**"
+            ),
             "embeds": [
                 {
                     "title": first.title,
@@ -187,7 +198,9 @@ class DiscordNotifier:
                     },
                 }
             ],
-            "allowed_mentions": {"parse": []},
+            "allowed_mentions": (
+                {"users": [self.user_id]} if self.user_id else {"parse": []}
+            ),
         }
         query_separator = "&" if urllib.parse.urlparse(self.webhook_url).query else "?"
         request = urllib.request.Request(

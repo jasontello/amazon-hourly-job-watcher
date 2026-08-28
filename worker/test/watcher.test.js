@@ -258,6 +258,7 @@ test("uses a Discord webhook as the preferred notification provider", async () =
     await sendNotification(
       {
         DISCORD_WEBHOOK_URL: "https://discord.com/api/webhooks/123456/secret-token",
+        DISCORD_USER_ID: "377516438161850391",
         TELEGRAM_BOT_TOKEN: "unused",
         TELEGRAM_CHAT_ID: "unused",
       },
@@ -265,10 +266,10 @@ test("uses a Discord webhook as the preferred notification provider", async () =
       false,
     );
     assert.equal(requestedUrl, "https://discord.com/api/webhooks/123456/secret-token?wait=true");
-    assert.match(requestedBody.content, /For Jason/);
+    assert.match(requestedBody.content, /^<@377516438161850391>/);
     assert.match(requestedBody.embeds[0].description, /other-job days available/i);
     assert.match(requestedBody.embeds[0].url, /scheduleId=SCH-US-456/);
-    assert.deepEqual(requestedBody.allowed_mentions, { parse: [] });
+    assert.deepEqual(requestedBody.allowed_mentions, { users: ["377516438161850391"] });
     assert.match(requestedHeaders["User-Agent"], /AmazonJobWatcher/);
   } finally {
     globalThis.fetch = originalFetch;
@@ -283,5 +284,19 @@ test("rejects a non-Discord webhook URL", async () => {
       false,
     ),
     /official Discord HTTPS webhook URL/,
+  );
+});
+
+test("rejects an invalid Discord user ID", async () => {
+  await assert.rejects(
+    sendDiscord(
+      {
+        DISCORD_WEBHOOK_URL: "https://discord.com/api/webhooks/123456/secret-token",
+        DISCORD_USER_ID: "not-a-user",
+      },
+      [{ profileLabel: "test" }],
+      false,
+    ),
+    /17-20 digit Discord user ID/,
   );
 });

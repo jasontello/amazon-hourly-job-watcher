@@ -92,7 +92,14 @@ incoming webhook that is limited to posting in one private channel.
    npx wrangler secret put DISCORD_WEBHOOK_URL
    ```
 
-6. On the iPhone, enable mobile push for the server and set the alert channel's notification
+6. Enable Discord Developer Mode, copy your numeric user ID, and store it so every alert directly
+   mentions your account and reliably triggers mobile push:
+
+   ```bash
+   npx wrangler secret put DISCORD_USER_ID
+   ```
+
+7. On the iPhone, enable mobile push for the server and set the alert channel's notification
    override to **All Messages**.
 
 Treat the webhook URL like a password. Do not commit it or paste it into an issue, README, or chat.

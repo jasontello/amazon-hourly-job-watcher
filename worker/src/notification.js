@@ -123,6 +123,10 @@ export async function sendDiscord(env, opportunities, preferred) {
   if (!/^https:\/\/(?:canary\.|ptb\.)?discord(?:app)?\.com\/api\/webhooks\//.test(webhookUrl)) {
     throw new Error("DISCORD_WEBHOOK_URL must be an official Discord HTTPS webhook URL");
   }
+  const discordUserId = String(env.DISCORD_USER_ID || "").trim();
+  if (discordUserId && !/^\d{17,20}$/.test(discordUserId)) {
+    throw new Error("DISCORD_USER_ID must be a 17-20 digit Discord user ID");
+  }
   const first = opportunities[0];
   const applicationUrl = directApplicationUrl(first);
   const title = preferred ? "Preferred Amazon day job" : "Amazon day-shift job available";
@@ -137,7 +141,7 @@ export async function sendDiscord(env, opportunities, preferred) {
     },
     body: JSON.stringify({
       username: "Amazon Job Watcher",
-      content: `**${title} — ${first.profileLabel}**`,
+      content: `${discordUserId ? `<@${discordUserId}> ` : ""}**${title} — ${first.profileLabel}**`,
       embeds: [
         {
           title: first.title,
@@ -147,7 +151,7 @@ export async function sendDiscord(env, opportunities, preferred) {
           footer: { text: "Tap the title to apply on Amazon. The watcher never applies automatically." },
         },
       ],
-      allowed_mentions: { parse: [] },
+      allowed_mentions: discordUserId ? { users: [discordUserId] } : { parse: [] },
     }),
   });
   if (!response.ok) {
