@@ -24,10 +24,21 @@ class Opportunity:
     posted_at: str
     detected_at: datetime
     first_day: str
+    schedule_type_code: str = ""
+    site_ids: tuple[str, ...] = ()
+    site_address: str | None = None
+    profile_id: str = ""
+    profile_label: str = ""
+    fit_summary: str = ""
+    schedule_days: tuple[str, ...] = ()
+    other_job_days: tuple[str, ...] = ()
+    is_flexible: bool = False
+    preferred: bool = False
 
     @property
     def key(self) -> str:
-        return f"schedule:{self.schedule_id}"
+        prefix = f"profile:{self.profile_id}:" if self.profile_id else ""
+        return f"{prefix}schedule:{self.schedule_id}"
 
     @property
     def direct_application_url(self) -> str:
@@ -58,5 +69,12 @@ class Opportunity:
             "detected_at": self.detected_at.isoformat(),
             "first_day": self.first_day,
             "application_url": self.direct_application_url,
+            "profile_id": self.profile_id,
+            "profile_label": self.profile_label,
+            "site_ids": list(self.site_ids),
+            "fit_summary": self.fit_summary,
+            "schedule_days": list(self.schedule_days),
+            "other_job_days": list(self.other_job_days),
+            "is_flexible": self.is_flexible,
+            "preferred": self.preferred,
         }
-

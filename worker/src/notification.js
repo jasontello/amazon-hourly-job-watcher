@@ -26,7 +26,7 @@ function scheduleLine(opportunity) {
       : `${opportunity.hoursPerWeek} hrs/week`;
   return (
     `- ${opportunity.scheduleType} | ${opportunity.scheduleText} | ${hours} | ` +
-    `${opportunity.payDisplay} | starts ${opportunity.firstDay}`
+    `${opportunity.payDisplay} | starts ${opportunity.firstDay}\n  ${opportunity.fitSummary}`
   );
 }
 
@@ -35,9 +35,12 @@ export function formatNotification(opportunities) {
   const first = opportunities[0];
   if (opportunities.length === 1) {
     return [
+      first.profileLabel,
       first.title,
       `Location: ${first.location}`,
+      ...(first.siteIds?.length ? [`Site: ${first.siteIds.join(", ")}`] : []),
       `Shift: ${first.scheduleType} | ${first.scheduleText}`,
+      `Why it fits: ${first.fitSummary}`,
       `Hours/type: ${first.hoursPerWeek ?? "Not listed"} hrs/week | ${first.employmentType}`,
       `Pay: ${first.payDisplay}`,
       `Posted by Amazon: ${first.postedAt}`,
@@ -47,8 +50,10 @@ export function formatNotification(opportunities) {
     ].join("\n");
   }
   return [
+    first.profileLabel,
     first.title,
     `Location: ${first.location}`,
+    ...(first.siteIds?.length ? [`Site: ${first.siteIds.join(", ")}`] : []),
     `${opportunities.length} new selectable schedules:`,
     ...opportunities.map(scheduleLine),
     `Employment: ${[...new Set(opportunities.map((item) => item.employmentType))].join(", ")}`,
@@ -67,7 +72,7 @@ export async function sendNtfy(env, opportunities, preferred) {
   const applicationUrl = directApplicationUrl(first);
   const headers = {
     "Content-Type": "text/plain; charset=utf-8",
-    Title: preferred ? "Amazon Flex job available" : "Amazon warehouse job available",
+    Title: preferred ? "Preferred Amazon day job" : "Amazon day-shift job available",
     Priority: preferred ? "urgent" : "high",
     Tags: preferred ? "rotating_light,package" : "package",
     Click: applicationUrl,
@@ -90,7 +95,7 @@ export async function sendTelegram(env, opportunities, preferred) {
   }
   const first = opportunities[0];
   const applicationUrl = directApplicationUrl(first);
-  const title = preferred ? "AMAZON FLEX JOB AVAILABLE" : "AMAZON WAREHOUSE JOB AVAILABLE";
+  const title = preferred ? "PREFERRED AMAZON DAY JOB" : "AMAZON DAY-SHIFT JOB";
   const response = await fetch(
     `https://api.telegram.org/bot${encodeURIComponent(env.TELEGRAM_BOT_TOKEN)}/sendMessage`,
     {

@@ -3,13 +3,15 @@ from __future__ import annotations
 import json
 import logging
 import random
+import re
 import time
 import urllib.error
 import urllib.request
+from dataclasses import replace
 from datetime import datetime
 from typing import Any
 
-from .config import ApiConfig, Config
+from .config import ApiConfig, Config, Profile
 from .models import Opportunity
 
 LOGGER = logging.getLogger(__name__)
@@ -31,7 +33,8 @@ JOB_DETAIL_QUERY = """
 query getJobDetail($getJobDetailRequest: GetJobDetailRequest!) {
   getJobDetail(getJobDetailRequest: $getJobDetailRequest) {
     jobId jobTitle jobType jobTypeL10N employmentType employmentTypeL10N
-    locationName postingStatus mostRecentPostedDate currencyCode
+    locationName fullAddress siteId locationDescription geoClusterDescription locationCode
+    postingStatus mostRecentPostedDate currencyCode
   }
 }
 """
@@ -44,6 +47,7 @@ query searchScheduleCards($searchScheduleRequest: SearchScheduleRequest!) {
       scheduleId jobId employmentType scheduleType scheduleTypeL10N hoursPerWeek
       totalPayRate totalPayRateL10N firstDayOnSite firstDayOnSiteL10N
       scheduleText scheduleTextDescription laborDemandAvailableCount
+      address city state postalCode siteId
     }
   }
 }
@@ -229,31 +233,178 @@ def _normalized(value: Any) -> str:
     return str(value or "").strip().casefold()
 
 
-def card_matches(card: dict[str, Any], config: Config) -> bool:
+def _normalized_code(value: Any) -> str:
+    return str(value or "").strip().upper().replace(" ", "_")
+
+
+def candidate_profiles(card: dict[str, Any], config: Config) -> list[Profile]:
     city = _normalized(card.get("city"))
     state = str(card.get("state") or "").strip().upper()
-    location_match = any(
-        city == location.city.casefold() and state == location.state
-        for location in config.locations
-    )
-    if not location_match:
-        return False
     searchable = " ".join(
         _normalized(card.get(field)) for field in ("jobTitle", "tagLine", "jobTypeL10N")
     )
-    return any(keyword in searchable for keyword in config.include_keywords)
+    return [
+        profile
+        for profile in config.profiles
+        if any(
+            city == location.city.casefold() and state == location.state
+            for location in profile.locations
+        )
+        and any(keyword in searchable for keyword in profile.include_keywords)
+    ]
+
+
+def card_matches(card: dict[str, Any], config: Config) -> bool:
+    return bool(candidate_profiles(card, config))
+
+
+DAY_NAMES = {
+    "sun": "Sun",
+    "sunday": "Sun",
+    "mon": "Mon",
+    "monday": "Mon",
+    "tue": "Tue",
+    "tues": "Tue",
+    "tuesday": "Tue",
+    "wed": "Wed",
+    "wednesday": "Wed",
+    "thu": "Thu",
+    "thur": "Thu",
+    "thurs": "Thu",
+    "thursday": "Thu",
+    "fri": "Fri",
+    "friday": "Fri",
+    "sat": "Sat",
+    "saturday": "Sat",
+}
+DAY_PATTERN = re.compile(
+    r"\b(Sun(?:day)?|Mon(?:day)?|Tue(?:s|sday)?|Wed(?:nesday)?|"
+    r"Thu(?:r|rs|rsday)?|Fri(?:day)?|Sat(?:urday)?)\b",
+    re.IGNORECASE,
+)
+SHIFT_LINE_PATTERN = re.compile(
+    r"^(.*?)\s+(\d{1,2}:\d{2}\s*[AP]M)\s*-\s*(\d{1,2}:\d{2}\s*[AP]M)$",
+    re.IGNORECASE,
+)
+
+
+def _clock_minutes(value: str) -> int | None:
+    match = re.fullmatch(r"(\d{1,2}):(\d{2})\s*([AP]M)", value.strip(), re.IGNORECASE)
+    if not match:
+        return None
+    hours, minutes = int(match.group(1)), int(match.group(2))
+    if not 1 <= hours <= 12 or not 0 <= minutes <= 59:
+        return None
+    if hours == 12:
+        hours = 0
+    if match.group(3).upper() == "PM":
+        hours += 12
+    return hours * 60 + minutes
+
+
+def _policy_minutes(value: str) -> int:
+    hours, minutes = map(int, value.split(":"))
+    return hours * 60 + minutes
+
+
+def parse_schedule_text(schedule_text: str, config: Config) -> tuple[bool, str, tuple[str, ...]]:
+    text = str(schedule_text or "").replace("\u202f", " ").strip()
+    if not text:
+        return False, "schedule text missing", ()
+    policy = config.day_shift_policy
+    earliest_start = _policy_minutes(policy.earliest_start)
+    latest_start = _policy_minutes(policy.latest_start)
+    latest_end = _policy_minutes(policy.latest_end)
+    days: dict[str, None] = {}
+    for line in (line.strip() for line in text.splitlines() if line.strip()):
+        match = SHIFT_LINE_PATTERN.fullmatch(line)
+        if not match:
+            return False, f"unrecognized schedule line: {line}", ()
+        line_days = [DAY_NAMES[item.casefold()] for item in DAY_PATTERN.findall(match.group(1))]
+        if not line_days:
+            return False, f"could not parse schedule days: {line}", ()
+        start = _clock_minutes(match.group(2))
+        end = _clock_minutes(match.group(3))
+        if start is None or end is None:
+            return False, f"could not parse schedule time: {line}", ()
+        if end <= start:
+            return False, f"overnight shift: {line}", ()
+        if start < earliest_start or start > latest_start or end > latest_end:
+            return False, f"outside sleep-safe hours: {line}", ()
+        for day in line_days:
+            days[day] = None
+    return True, "day shift", tuple(days)
 
 
 def is_preferred(opportunity: Opportunity, config: Config) -> bool:
-    searchable = " ".join(
-        (
-            opportunity.job_type,
-            opportunity.schedule_type,
-            opportunity.schedule_text,
-            opportunity.employment_type,
+    del config
+    return opportunity.preferred
+
+
+def match_opportunity_to_profile(
+    opportunity: Opportunity, profile: Profile, config: Config
+) -> Opportunity | None:
+    schedule_type_code = _normalized_code(
+        opportunity.schedule_type_code or opportunity.schedule_type
+    )
+    if profile.allowed_schedule_types and schedule_type_code not in profile.allowed_schedule_types:
+        return None
+    if profile.required_site_ids and not set(profile.required_site_ids).intersection(
+        opportunity.site_ids
+    ):
+        return None
+
+    is_flexible = "FLEX" in schedule_type_code or "flexible shift" in _normalized(
+        opportunity.schedule_text
+    )
+    preferred = schedule_type_code in profile.preferred_schedule_types
+    if is_flexible:
+        if not config.day_shift_policy.allow_flexible_shifts:
+            return None
+        other_days = (
+            profile.other_job_availability.candidate_days
+            if profile.other_job_availability
+            else ()
         )
-    ).casefold()
-    return any(keyword in searchable for keyword in config.preferred_shift_keywords)
+        return replace(
+            opportunity,
+            profile_id=profile.id,
+            profile_label=profile.label,
+            fit_summary=(
+                "Flex listing — exact days/times are selected later; "
+                "verify daytime options before accepting."
+            ),
+            other_job_days=other_days,
+            is_flexible=True,
+            preferred=preferred,
+        )
+
+    valid, _reason, schedule_days = parse_schedule_text(opportunity.schedule_text, config)
+    if not valid:
+        return None
+    other_days: tuple[str, ...] = ()
+    if profile.other_job_availability:
+        other_days = tuple(
+            day
+            for day in profile.other_job_availability.candidate_days
+            if day not in schedule_days
+        )
+        if len(other_days) < profile.other_job_availability.required_free_days:
+            return None
+    fit_summary = (
+        f"Day-safe schedule; other-job days available: {', '.join(other_days)}."
+        if profile.other_job_availability
+        else "Day-safe schedule; no overnight hours."
+    )
+    return replace(
+        opportunity,
+        profile_id=profile.id,
+        profile_label=profile.label,
+        fit_summary=fit_summary,
+        schedule_days=schedule_days,
+        other_job_days=other_days,
+        preferred=preferred,
+    )
 
 
 def build_opportunities(
@@ -293,7 +444,18 @@ def build_opportunities(
                     or schedule.get("scheduleType")
                     or "Not listed"
                 ),
+                schedule_type_code=_normalized_code(schedule.get("scheduleType")),
                 schedule_text=str(schedule.get("scheduleText") or "Schedule details not listed"),
+                site_ids=tuple(
+                    dict.fromkeys(
+                        _normalized_code(site_id)
+                        for value in (detail.get("siteId"), schedule.get("siteId"))
+                        for site_id in (value if isinstance(value, list) else [value])
+                        if _normalized_code(site_id)
+                    )
+                ),
+                site_address=str(detail.get("fullAddress") or schedule.get("address") or "").strip()
+                or None,
                 hours_per_week=float(schedule["hoursPerWeek"])
                 if isinstance(schedule.get("hoursPerWeek"), (int, float))
                 else None,
@@ -309,4 +471,3 @@ def build_opportunities(
             )
         )
     return opportunities
-

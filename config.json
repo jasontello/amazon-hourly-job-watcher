@@ -1,28 +1,52 @@
 {
-  "locations": [
+  "profiles": [
     {
-      "city": "Oakley",
-      "state": "CA"
+      "id": "jason",
+      "label": "For Jason — Oakley/Vacaville",
+      "locations": [
+        { "city": "Oakley", "state": "CA" },
+        { "city": "Vacaville", "state": "CA" }
+      ],
+      "required_site_ids": [],
+      "include_keywords": [
+        "warehouse",
+        "fulfillment center",
+        "sortation center",
+        "delivery station",
+        "package sorter"
+      ],
+      "allowed_schedule_types": ["PART_TIME", "FLEX_TIME"],
+      "preferred_schedule_types": ["FLEX_TIME"],
+      "other_job_availability": {
+        "candidate_days": ["Tue", "Wed", "Thu", "Fri"],
+        "required_free_days": 3
+      }
     },
     {
-      "city": "Vacaville",
-      "state": "CA"
+      "id": "friend_dsm4",
+      "label": "For friend — DSM4 West Sacramento",
+      "locations": [
+        { "city": "West Sacramento", "state": "CA" }
+      ],
+      "required_site_ids": ["SITE-DSM4"],
+      "include_keywords": [
+        "warehouse",
+        "fulfillment center",
+        "sortation center",
+        "delivery station",
+        "package sorter"
+      ],
+      "allowed_schedule_types": [],
+      "preferred_schedule_types": ["FULL_TIME"],
+      "other_job_availability": null
     }
   ],
-  "include_keywords": [
-    "warehouse",
-    "fulfillment center",
-    "sortation center",
-    "delivery station",
-    "package sorter"
-  ],
-  "preferred_shift_keywords": [
-    "flex_time",
-    "flex time",
-    "flexible shifts",
-    "flexpt",
-    "flex pt"
-  ],
+  "day_shift_policy": {
+    "earliest_start": "05:00",
+    "latest_start": "16:00",
+    "latest_end": "23:00",
+    "allow_flexible_shifts": true
+  },
   "timezone": "America/Los_Angeles",
   "api": {
     "url": "https://hiring.amazon.com/graphql",
@@ -37,4 +61,3 @@
     "retention_days": 365
   }
 }
-

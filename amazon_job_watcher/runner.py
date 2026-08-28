@@ -9,8 +9,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from .amazon import (
     AmazonHourlyClient,
     build_opportunities,
+    candidate_profiles,
     card_matches,
     is_preferred,
+    match_opportunity_to_profile,
 )
 from .config import Config
 from .notifier import NtfyNotifier
@@ -40,6 +42,7 @@ def run(config: Config, *, dry_run: bool = False, baseline: bool = False) -> int
 
     opportunities = []
     for card in matching_cards:
+        profiles = candidate_profiles(card, config)
         job_id = str(card["jobId"])
         detail = client.fetch_job_detail(job_id)
         if detail.get("postingStatus") not in (None, "POSTED"):
@@ -49,10 +52,22 @@ def run(config: Config, *, dry_run: bool = False, baseline: bool = False) -> int
         if not schedules:
             LOGGER.warning("Matching job %s currently has no selectable schedules", job_id)
             continue
-        opportunities.extend(build_opportunities(card, detail, schedules, detected_at))
+        for opportunity in build_opportunities(card, detail, schedules, detected_at):
+            opportunities.extend(
+                matched
+                for profile in profiles
+                if (matched := match_opportunity_to_profile(opportunity, profile, config))
+                is not None
+            )
 
+    profile_order = {profile.id: index for index, profile in enumerate(config.profiles)}
     opportunities.sort(
-        key=lambda item: (not is_preferred(item, config), -(item.pay or 0), item.schedule_id)
+        key=lambda item: (
+            profile_order[item.profile_id],
+            not is_preferred(item, config),
+            -(item.pay or 0),
+            item.schedule_id,
+        )
     )
     new_opportunities = [item for item in opportunities if not state.contains(item.key)]
 
@@ -69,7 +84,7 @@ def run(config: Config, *, dry_run: bool = False, baseline: bool = False) -> int
     assert notifier is not None
     opportunities_by_job: dict[str, list] = defaultdict(list)
     for opportunity in new_opportunities:
-        opportunities_by_job[opportunity.job_id].append(opportunity)
+        opportunities_by_job[f"{opportunity.profile_id}:{opportunity.job_id}"].append(opportunity)
     for job_opportunities in opportunities_by_job.values():
         preferred = any(is_preferred(item, config) for item in job_opportunities)
         notifier.send_many(job_opportunities, preferred=preferred)

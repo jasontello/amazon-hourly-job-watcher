@@ -13,7 +13,8 @@ query searchJobCardsByLocation($searchJobRequest: SearchJobRequest!) {
 const JOB_DETAIL_QUERY = `
 query getJobDetail($getJobDetailRequest: GetJobDetailRequest!) {
   getJobDetail(getJobDetailRequest: $getJobDetailRequest) {
-    jobId jobTitle postingStatus mostRecentPostedDate
+    jobId jobTitle postingStatus mostRecentPostedDate locationName fullAddress
+    siteId locationDescription geoClusterDescription locationCode
   }
 }`;
 
@@ -24,7 +25,8 @@ query searchScheduleCards($searchScheduleRequest: SearchScheduleRequest!) {
     scheduleCards {
       scheduleId jobId employmentType scheduleType scheduleTypeL10N hoursPerWeek
       totalPayRate totalPayRateL10N firstDayOnSite firstDayOnSiteL10N
-      scheduleText laborDemandAvailableCount
+      scheduleText scheduleTextDescription laborDemandAvailableCount
+      address city state postalCode siteId
     }
   }
 }`;
@@ -190,17 +192,108 @@ export class AmazonHourlyClient {
 
 const normalized = (value) => String(value ?? "").trim().toLocaleLowerCase("en-US");
 
-export function cardMatches(card, config = WATCH_CONFIG) {
+const DAY_NAMES = Object.freeze({
+  sun: "Sun",
+  sunday: "Sun",
+  mon: "Mon",
+  monday: "Mon",
+  tue: "Tue",
+  tues: "Tue",
+  tuesday: "Tue",
+  wed: "Wed",
+  wednesday: "Wed",
+  thu: "Thu",
+  thur: "Thu",
+  thurs: "Thu",
+  thursday: "Thu",
+  fri: "Fri",
+  friday: "Fri",
+  sat: "Sat",
+  saturday: "Sat",
+});
+
+function normalizedCode(value) {
+  return String(value ?? "").trim().toUpperCase().replaceAll(" ", "_");
+}
+
+function clockMinutes(value) {
+  const match = String(value).trim().match(/^(\d{1,2}):(\d{2})\s*([AP]M)$/i);
+  if (!match) return null;
+  let hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours < 1 || hours > 12 || minutes > 59) return null;
+  if (hours === 12) hours = 0;
+  if (match[3].toUpperCase() === "PM") hours += 12;
+  return hours * 60 + minutes;
+}
+
+function policyMinutes(value) {
+  const match = String(value).match(/^(\d{2}):(\d{2})$/);
+  if (!match) throw new Error(`Invalid day-shift policy time: ${value}`);
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+function siteIdsFrom(...values) {
+  const result = new Set();
+  for (const value of values.flat(Infinity)) {
+    const code = normalizedCode(value);
+    if (code) result.add(code);
+  }
+  return [...result];
+}
+
+export function parseScheduleText(scheduleText, policy = WATCH_CONFIG.dayShiftPolicy) {
+  const text = String(scheduleText ?? "").replaceAll("\u202f", " ").trim();
+  if (!text) return { valid: false, reason: "schedule text missing", days: [], segments: [] };
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const days = new Set();
+  const segments = [];
+  const earliestStart = policyMinutes(policy.earliestStart);
+  const latestStart = policyMinutes(policy.latestStart);
+  const latestEnd = policyMinutes(policy.latestEnd);
+  for (const line of lines) {
+    const match = line.match(/^(.*?)\s+(\d{1,2}:\d{2}\s*[AP]M)\s*-\s*(\d{1,2}:\d{2}\s*[AP]M)$/i);
+    if (!match) {
+      return { valid: false, reason: `unrecognized schedule line: ${line}`, days: [], segments: [] };
+    }
+    const lineDays = [...match[1].matchAll(/\b(Sun(?:day)?|Mon(?:day)?|Tue(?:s|sday)?|Wed(?:nesday)?|Thu(?:r|rs|rsday)?|Fri(?:day)?|Sat(?:urday)?)\b/gi)]
+      .map((dayMatch) => DAY_NAMES[dayMatch[1].toLocaleLowerCase("en-US")]);
+    if (!lineDays.length || lineDays.some((day) => !day)) {
+      return { valid: false, reason: `could not parse schedule days: ${line}`, days: [], segments: [] };
+    }
+    const start = clockMinutes(match[2]);
+    const end = clockMinutes(match[3]);
+    if (start === null || end === null) {
+      return { valid: false, reason: `could not parse schedule time: ${line}`, days: [], segments: [] };
+    }
+    if (end <= start) {
+      return { valid: false, reason: `overnight shift: ${line}`, days: [], segments: [] };
+    }
+    if (start < earliestStart || start > latestStart || end > latestEnd) {
+      return { valid: false, reason: `outside sleep-safe hours: ${line}`, days: [], segments: [] };
+    }
+    lineDays.forEach((day) => days.add(day));
+    segments.push({ days: lineDays, start, end, text: line });
+  }
+  return { valid: true, reason: "day shift", days: [...days], segments };
+}
+
+export function candidateProfiles(card, config = WATCH_CONFIG) {
   const city = normalized(card.city);
   const state = String(card.state ?? "").trim().toUpperCase();
-  const locationMatches = config.locations.some(
-    (location) => city === normalized(location.city) && state === location.state,
-  );
-  if (!locationMatches) return false;
   const searchable = [card.jobTitle, card.tagLine, card.jobTypeL10N]
     .map(normalized)
     .join(" ");
-  return config.includeKeywords.some((keyword) => searchable.includes(keyword));
+  return config.profiles.filter((profile) => {
+    const locationMatches = profile.locations.some(
+      (location) => city === normalized(location.city) && state === location.state,
+    );
+    return locationMatches && profile.includeKeywords.some((keyword) => searchable.includes(keyword));
+  });
+}
+
+export function cardMatches(card, config = WATCH_CONFIG) {
+  return candidateProfiles(card, config).length > 0;
 }
 
 export function buildOpportunities(card, detail, schedules, detectedAt) {
@@ -214,7 +307,10 @@ export function buildOpportunities(card, detail, schedules, detectedAt) {
       jobType: card.jobTypeL10N || card.jobType || "Not listed",
       employmentType: schedule.employmentType || "Not listed",
       scheduleType: schedule.scheduleTypeL10N || schedule.scheduleType || "Not listed",
+      scheduleTypeCode: normalizedCode(schedule.scheduleType),
       scheduleText: schedule.scheduleText || "Schedule details not listed",
+      siteIds: siteIdsFrom(detail.siteId || [], schedule.siteId || []),
+      siteAddress: detail.fullAddress || schedule.address || null,
       hoursPerWeek:
         typeof schedule.hoursPerWeek === "number" ? schedule.hoursPerWeek : null,
       pay: typeof schedule.totalPayRate === "number" ? schedule.totalPayRate : null,
@@ -227,14 +323,68 @@ export function buildOpportunities(card, detail, schedules, detectedAt) {
     }));
 }
 
-export function isPreferred(opportunity, config = WATCH_CONFIG) {
-  const searchable = [
-    opportunity.jobType,
-    opportunity.scheduleType,
-    opportunity.scheduleText,
-    opportunity.employmentType,
-  ]
-    .join(" ")
-    .toLocaleLowerCase("en-US");
-  return config.preferredShiftKeywords.some((keyword) => searchable.includes(keyword));
+export function matchOpportunityToProfile(opportunity, profile, config = WATCH_CONFIG) {
+  const scheduleTypeCode = normalizedCode(opportunity.scheduleTypeCode || opportunity.scheduleType);
+  if (
+    profile.allowedScheduleTypes.length &&
+    !profile.allowedScheduleTypes.map(normalizedCode).includes(scheduleTypeCode)
+  ) {
+    return null;
+  }
+  const opportunitySites = new Set(opportunity.siteIds.map(normalizedCode));
+  if (
+    profile.requiredSiteIds.length &&
+    !profile.requiredSiteIds.map(normalizedCode).some((siteId) => opportunitySites.has(siteId))
+  ) {
+    return null;
+  }
+
+  const isFlexible = scheduleTypeCode.includes("FLEX") || normalized(opportunity.scheduleText).includes("flexible shift");
+  if (isFlexible) {
+    if (!config.dayShiftPolicy.allowFlexibleShifts) return null;
+    return {
+      ...opportunity,
+      profileId: profile.id,
+      profileLabel: profile.label,
+      isFlexible: true,
+      scheduleDays: [],
+      otherJobDays: profile.otherJobAvailability?.candidateDays || [],
+      fitSummary: "Flex listing — exact days/times are selected later; verify daytime options before accepting.",
+      preferred: profile.preferredScheduleTypes.map(normalizedCode).includes(scheduleTypeCode),
+    };
+  }
+
+  const parsed = parseScheduleText(opportunity.scheduleText, config.dayShiftPolicy);
+  if (!parsed.valid) return null;
+  let otherJobDays = [];
+  if (profile.otherJobAvailability) {
+    const scheduledDays = new Set(parsed.days);
+    otherJobDays = profile.otherJobAvailability.candidateDays.filter(
+      (day) => !scheduledDays.has(day),
+    );
+    if (otherJobDays.length < profile.otherJobAvailability.requiredFreeDays) return null;
+  }
+  const fitSummary = profile.otherJobAvailability
+    ? `Day-safe schedule; other-job days available: ${otherJobDays.join(", ")}.`
+    : "Day-safe schedule; no overnight hours.";
+  return {
+    ...opportunity,
+    profileId: profile.id,
+    profileLabel: profile.label,
+    isFlexible: false,
+    scheduleDays: parsed.days,
+    otherJobDays,
+    fitSummary,
+    preferred: profile.preferredScheduleTypes.map(normalizedCode).includes(scheduleTypeCode),
+  };
+}
+
+export function matchingProfileOpportunities(opportunity, profiles, config = WATCH_CONFIG) {
+  return profiles
+    .map((profile) => matchOpportunityToProfile(opportunity, profile, config))
+    .filter(Boolean);
+}
+
+export function isPreferred(opportunity) {
+  return Boolean(opportunity.preferred);
 }

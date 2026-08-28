@@ -1,76 +1,107 @@
-# Amazon Hourly Job Watcher
+# Amazon Day-Shift Job Watcher
 
-A hosted watcher for Amazon hourly warehouse jobs in **Oakley, California** and **Vacaville,
-California**, with urgent alerts for Flex Time / FlexPT / Flexible Shifts schedules.
+A hosted, notification-only watcher for two Amazon warehouse job searches:
 
-> **Production status:** paused. The Cloudflare cron trigger is disabled because the position was
-> filled successfully. The Worker and saved state remain available for future reactivation.
+- **Jason:** Oakley or Vacaville, California; part-time or Flex/FlexPT; compatible with a
+  three-day Digital NEST schedule chosen from Tuesday through Friday.
+- **Friend:** the exact **DSM4** delivery station at 3620 Ramos Drive in West Sacramento; any
+  sleep-safe/day schedule, with full-time openings marked preferred.
 
-It checks Amazon's official hourly hiring feed every five minutes, detects new matching schedules,
-stores what it has already reported, and sends a Telegram or ntfy push notification to an iPhone. It
-never logs in, fills out an application, or applies automatically.
+It reads Amazon's official hourly hiring feed, evaluates every selectable schedule, remembers
+which schedules were already delivered, and pushes new matches to an iPhone. It never signs in,
+fills an application, or applies automatically.
+
+> **Production status:** the updated Worker is deployed, but its recurring cron remains paused
+> until a reliable Telegram notification destination is configured. The existing ntfy credentials
+> remain installed, but ntfy has rate-limited Cloudflare's shared outbound IP in production.
+
+## Matching rules
+
+### Jason — Oakley and Vacaville
+
+A schedule must meet all of these rules:
+
+1. The job is in Oakley or Vacaville and describes an Amazon warehouse, fulfillment, sortation,
+   delivery-station, or package-sorter role.
+2. Amazon classifies the schedule as `PART_TIME` or `FLEX_TIME`.
+3. Every fixed shift starts from **5:00 a.m. through 4:00 p.m.**, ends no later than **11:00 p.m.**,
+   and does not cross midnight.
+4. The Amazon workdays leave at least three of **Tuesday, Wednesday, Thursday, and Friday** open
+   for Digital NEST. Equivalently, Amazon may occupy at most one of those four days.
+
+Examples:
+
+- Amazon Sunday/Monday/Tuesday: accepted; Digital NEST can be Wednesday/Thursday/Friday.
+- Amazon Sunday/Wednesday/Saturday: accepted; Digital NEST can be Tuesday/Thursday/Friday.
+- Amazon Monday/Tuesday/Wednesday: rejected; only Thursday/Friday remain for Digital NEST.
+
+`Flexible Shifts` listings are accepted because their exact days and times are selected later.
+Their alert explicitly says to verify that daytime choices are actually available before accepting.
+
+### Friend — DSM4 West Sacramento
+
+The job must resolve to Amazon's exact `SITE-DSM4` facility identifier. Matching by this identifier
+avoids notifying for other Amazon buildings in West Sacramento. All employment types are allowed,
+the same sleep-safe time window is enforced, and `FULL_TIME` alerts receive preferred priority.
 
 ## Notification contents
 
-- Job title and location
-- Shift type and exact schedule text
-- Hours per week and employment type
-- Hourly pay when Amazon lists it
-- Amazon's posting date and the exact detection time
-- First-day date when available
-- A direct official Amazon application URL with the job and schedule preselected
+Each push includes:
 
-When one posting contains several new schedules, the watcher groups them into one push to avoid alert
-spam. It stores each schedule ID separately, so a Flex schedule added later to an existing posting
-creates a fresh alert.
+- who the match is for;
+- job title, city, and Amazon facility ID when available;
+- shift type, exact workdays and hours, weekly hours, and employment type;
+- why the schedule passed the filter and which Digital NEST days remain available;
+- hourly pay, Amazon posting date, detection time, and first day when available; and
+- a direct official Amazon application URL with the job and schedule preselected.
+
+If one posting has several new eligible schedules, they are grouped into one notification. Each
+profile and schedule ID is stored separately, so an added schedule or a match for the other profile
+still produces a new alert.
 
 ## Architecture
 
 ```text
-Cloudflare Cron Trigger (every 5 minutes)
+Cloudflare Cron Trigger (every 5 minutes when enabled)
   -> one strongly consistent Durable Object
   -> Amazon official hourly-jobs GraphQL feed
-  -> exact city/state + warehouse keyword filters
-  -> job details and selectable schedules
-  -> compare with Durable Object seen-schedule state
-  -> Telegram (preferred) or ntfy push to iPhone
-  -> persist successfully delivered schedule IDs
+  -> profile, facility, schedule-type, time, and weekday filters
+  -> compare with profile-scoped delivered-schedule state
+  -> Telegram push to iPhone (ntfy fallback supported)
+  -> store IDs only after successful delivery
 
 GitHub
-  -> source control + Python/Node tests + Worker bundle validation
+  -> source control + Node/Python tests + Worker bundle validation
 ```
 
-Cloudflare is the continuous runtime because Amazon currently blocks GitHub-hosted runner IPs from
-the hourly hiring feed. A live Cloudflare egress test confirmed that the official feed is reachable
-from the Worker runtime. The Worker uses web-platform APIs and has no production dependencies.
+Cloudflare is the continuous runtime because the Amazon feed has rejected GitHub-hosted runner
+traffic. The Worker uses web-platform APIs and has no production runtime dependencies.
 
-## iPhone setup with Telegram (recommended)
+## Finish iPhone notifications with Telegram
 
-Telegram is the reliable free option for Cloudflare Workers because bot quotas are not pooled by the
-Worker's shared outbound IP.
+Telegram is recommended because its bot delivery is not subject to ntfy's Cloudflare shared-IP
+quota.
 
 1. Install Telegram on the iPhone.
 2. Open the verified **@BotFather** chat and send `/newbot`.
-3. Follow its prompts, then copy the bot token it returns.
+3. Follow its prompts and copy the bot token.
 4. Open the new bot's chat and send `/start` once.
-5. Add the token to Cloudflare with `npx wrangler secret put TELEGRAM_BOT_TOKEN`.
-6. Obtain the numeric chat ID from the bot's `getUpdates` response and save it with
-   `npx wrangler secret put TELEGRAM_CHAT_ID`.
+5. Store the token as an encrypted Cloudflare secret:
 
-When both Telegram secrets exist, the Worker automatically uses Telegram. Notifications include an
-**Apply now** button that opens the exact Amazon job and schedule.
+   ```bash
+   npx wrangler secret put TELEGRAM_BOT_TOKEN
+   ```
 
-## Alternative iPhone setup with ntfy
+6. Obtain the numeric chat ID from Telegram's `getUpdates` response and store it:
 
-1. Install [ntfy from the iOS App Store](https://apps.apple.com/us/app/ntfy/id1625396347).
-2. Create a free account at [ntfy.sh/app](https://ntfy.sh/app), then create an access token under
-   **Account -> Access tokens**.
-3. Create a long, hard-to-guess topic, such as `amazon-oakley-vacaville-` followed by a UUID.
-   A topic on public `ntfy.sh` acts like a password: anyone who knows it can subscribe.
-4. Subscribe to that exact topic in the ntfy app and allow notifications.
-5. Keep the topic and access token handy for the Cloudflare secret setup below.
+   ```bash
+   npx wrangler secret put TELEGRAM_CHAT_ID
+   ```
 
-## Deploy to Cloudflare
+Do not commit or paste the bot token into an issue, README, or chat. When both secrets exist, the
+Worker automatically uses Telegram and adds an **Apply now** button.
+
+## Deploy or reactivate
 
 Requirements: Node.js 20 or newer and a Cloudflare account.
 
@@ -78,113 +109,85 @@ Requirements: Node.js 20 or newer and a Cloudflare account.
 npm install
 npx wrangler login
 npx wrangler whoami
-```
-
-`wrangler login` opens Cloudflare's OAuth page. `whoami` must show the intended account before any
-deployment.
-
-Add the ntfy topic and access token as encrypted Worker secrets:
-
-```bash
-npx wrangler secret put NTFY_TOPIC
-npx wrangler secret put NTFY_TOKEN
-```
-
-Paste the exact values when prompted. The access token is strongly recommended for hosted
-`ntfy.sh`. Be aware that ntfy's free hosted limits may still be pooled by source IP; Cloudflare's
-shared egress can therefore encounter a daily quota even when this watcher has sent very few
-messages. Use Telegram if that happens. Optional secret:
-
-```bash
-# Enables the protected manual POST /run endpoint
-npx wrangler secret put WATCHER_TOKEN
-```
-
-Deploy the Worker and its five-minute cron trigger:
-
-```bash
+npm test
+python3 -m unittest discover -s tests -v
+npx wrangler deploy --dry-run
 npm run deploy
 ```
 
-The first deployment creates the SQLite-backed Durable Object automatically. Cron changes can take
-up to 15 minutes to propagate globally.
+`whoami` must show the intended Cloudflare account before deployment. The first deployment creates
+the SQLite-backed Durable Object automatically.
 
-### Verify production
+The current [`wrangler.jsonc`](wrangler.jsonc) intentionally contains:
 
-The deploy command prints a `workers.dev` URL. Check its health endpoint:
-
-```bash
-curl https://amazon-hourly-job-watcher.<your-subdomain>.workers.dev/health
+```jsonc
+"triggers": { "crons": [] }
 ```
 
-Stream logs while a cron runs:
+After Telegram is tested successfully, reactivate five-minute checks by changing it to:
+
+```jsonc
+"triggers": { "crons": ["*/5 * * * *"] }
+```
+
+Then deploy again. Cron changes can take up to 15 minutes to propagate globally. To stop the
+watcher later, restore the empty list and redeploy.
+
+## Verify production
 
 ```bash
+curl https://amazon-hourly-job-watcher.amazon-hourly-job-watcher-worker.workers.dev/health
 npm run tail
 ```
 
-If `WATCHER_TOKEN` is configured, trigger an immediate check:
+The optional protected manual run endpoint requires a `WATCHER_TOKEN` secret:
 
 ```bash
+npx wrangler secret put WATCHER_TOKEN
 curl -X POST \
   -H 'Authorization: Bearer YOUR_WATCHER_TOKEN' \
-  https://amazon-hourly-job-watcher.<your-subdomain>.workers.dev/run
+  https://amazon-hourly-job-watcher.amazon-hourly-job-watcher-worker.workers.dev/run
 ```
 
-The root endpoint and `/health` expose only service status. `/run` is disabled unless its secret is
-set and rejects requests without the exact bearer token.
+The root endpoint and `/health` expose service status only. `/run` rejects requests unless the
+exact bearer token is supplied.
 
-## First-run behavior
+## Change locations, schedules, or keywords
 
-The first live run notifies you about matching jobs already open. That is intentional: an existing
-opening is still actionable. After ntfy accepts a push, the Worker records all schedules included in
-that notification.
+Edit [`config.json`](config.json). Each entry in `profiles` has independent locations, exact
+facility IDs, keywords, allowed schedule types, preferred schedule types, and optional other-job
+availability. The shared `day_shift_policy` controls acceptable fixed-shift hours.
 
-If a notification fails, those schedule IDs are not marked delivered, so the next cron retries. If a
-later schedule is added to an old job posting, only that unseen schedule triggers a new push.
-
-## Change locations or keywords
-
-Edit [`config.json`](config.json):
+Important fields:
 
 ```json
 {
-  "locations": [
-    { "city": "Oakley", "state": "CA" },
-    { "city": "Vacaville", "state": "CA" }
+  "profiles": [
+    {
+      "id": "jason",
+      "locations": [{ "city": "Oakley", "state": "CA" }],
+      "required_site_ids": [],
+      "allowed_schedule_types": ["PART_TIME", "FLEX_TIME"],
+      "preferred_schedule_types": ["FLEX_TIME"],
+      "other_job_availability": {
+        "candidate_days": ["Tue", "Wed", "Thu", "Fri"],
+        "required_free_days": 3
+      }
+    }
   ],
-  "include_keywords": [
-    "warehouse",
-    "fulfillment center",
-    "sortation center",
-    "delivery station",
-    "package sorter"
-  ],
-  "preferred_shift_keywords": [
-    "flex_time",
-    "flex time",
-    "flexible shifts",
-    "flexpt",
-    "flex pt"
-  ]
+  "day_shift_policy": {
+    "earliest_start": "05:00",
+    "latest_start": "16:00",
+    "latest_end": "23:00",
+    "allow_flexible_shifts": true
+  }
 }
 ```
 
-The Worker and local Python CLI share this one config file. Location matching is exact and
-case-insensitive. A job must match one configured city/state pair and one `include_keywords` entry.
-Preferred shift keywords do not exclude other warehouse jobs; they set matching Flex pushes to
-ntfy's **urgent** priority instead of **high**.
-
-After a config change:
-
-```bash
-npm test
-npm run deploy
-```
+The Worker and local Python CLI share the same configuration. Matching is case-insensitive, while
+facility identifiers and schedule-type codes are normalized to uppercase.
 
 ## Test and run locally
-
-The repository includes Worker unit tests and an independent Python 3.11+ CLI for live dry runs.
 
 ```bash
 npm test
@@ -193,13 +196,13 @@ python3 -m unittest discover -s tests -v
 python3 -m amazon_job_watcher --dry-run
 ```
 
-The Python `--dry-run` queries Amazon and prints unseen matches as JSON. It does not send a push or
-modify `state/seen_jobs.json`.
+The Python dry run queries Amazon and prints current eligible schedules as JSON. It does not send a
+push or modify `state/seen_jobs.json`. Its state is separate from Cloudflare production state.
 
-Additional local Python commands:
+Additional commands:
 
 ```bash
-# Send one sample push
+# Send one ntfy test push from the local Python client
 NTFY_TOPIC='your-topic' python3 -m amazon_job_watcher --test-notification
 
 # Record current local matches without notifying
@@ -209,52 +212,36 @@ python3 -m amazon_job_watcher --baseline
 python3 -m amazon_job_watcher --config path/to/config.json --dry-run
 ```
 
-The local Python state file is separate from Cloudflare production state.
-
 ## Reliability and safety
 
-- **Strongly consistent coordination:** every cron targets one Durable Object, with a transactional
-  run lease to prevent overlapping or duplicate cron executions.
-- **Schedule-level deduplication:** successful deliveries are keyed by Amazon schedule ID.
-- **Grouped pushes:** all new schedules for one job become one notification.
-- **Delivery ordering:** schedules are stored only after ntfy returns success.
-- **Retries:** transient network errors, HTTP 403/408/429, and server errors use bounded exponential
-  backoff with jitter.
-- **Rate limiting:** Amazon requests are spaced by at least one second; only matching cards trigger
-  detail and schedule calls.
-- **Schema checks:** unexpected API responses fail loudly without corrupting deduplication state.
-- **Timeouts:** every Amazon request has an abort timeout, and the cron records its last error.
-- **Retention:** delivered schedule records expire after 365 days.
-- **Secrets:** ntfy and manual-trigger credentials are encrypted Worker secrets, never source code.
-- **No auto-apply:** the program reads public listings and sends official links only.
+- **Strongly consistent coordination:** one Durable Object and a transactional run lease prevent
+  overlapping checks.
+- **Profile-scoped deduplication:** successful deliveries are keyed by profile plus Amazon schedule
+  ID.
+- **Safe delivery ordering:** schedule IDs are stored only after the push provider succeeds; a
+  failed push is retried on the next run.
+- **Rate limiting:** Amazon requests are at least one second apart, with bounded exponential retry
+  and jitter for temporary failures.
+- **Strict parsing:** unknown, malformed, overnight, too-early, and too-late fixed schedules fail
+  closed rather than creating misleading alerts.
+- **Exact facility matching:** the friend's search requires Amazon's DSM4 identifier.
+- **State retention:** delivered records expire after 365 days.
+- **Secrets:** notification and manual-run credentials are encrypted Cloudflare secrets and never
+  stored in source control.
+- **No auto-apply:** the project only reads public listings and sends official application links.
 
-Worker observability is enabled in [`wrangler.jsonc`](wrangler.jsonc), and `/health` returns the last
-run's status and counts. Positions can fill between detection and opening the application URL.
+Worker observability is enabled in [`wrangler.jsonc`](wrangler.jsonc), and `/health` returns the
+last run's status and counts by profile. Positions may fill between detection and opening the link.
 
-## Cost and timing
+## Cost and data-source limitations
 
-The Worker runs every five minutes, a deliberately conservative rate. Cloudflare's free Workers,
-Cron Triggers, and Durable Objects allowances are sufficient for this small personal workload on
-eligible accounts. If an account is not eligible for the free Durable Objects/Cron allowance,
-Cloudflare will show the plan requirement before deployment; do not upgrade without reviewing the
-current price.
+At this personal polling rate, the watcher is designed to fit Cloudflare's free allowances. Review
+Cloudflare's current plan screen before accepting any paid upgrade. Telegram bot messaging is free;
+ntfy also has a free hosted tier but its shared-IP quota was unreliable from this Worker.
 
-To reactivate the watcher, edit [`wrangler.jsonc`](wrangler.jsonc):
+The source is `https://hiring.amazon.com/graphql`, the structured feed used by Amazon's official
+hourly hiring site. Amazon may publish only a posting date rather than a precise timestamp; every
+alert therefore includes both Amazon's value and the watcher's precise detection time.
 
-```jsonc
-"triggers": { "crons": ["*/10 * * * *"] }
-```
-
-Then run `npm run deploy`. To pause it again, set `"crons": []` and redeploy.
-
-Do not poll more often than every five minutes. Cron execution can drift slightly, so this is
-near-real-time rather than a hard real-time guarantee.
-
-## Data source and limitations
-
-The watcher uses `https://hiring.amazon.com/graphql`, the structured hourly-job and schedule feed used
-by Amazon's official hiring site. Amazon currently reports a posting **date**, not a precise posting
-timestamp; pushes include that date and the watcher's precise detection time.
-
-This project is independent and is not affiliated with or endorsed by Amazon, Cloudflare, or ntfy.
-Use it responsibly and follow the applicable site and service terms.
+This independent project is not affiliated with or endorsed by Amazon, Cloudflare, Telegram, or
+ntfy. Use it responsibly and follow the applicable site and service terms.

@@ -1,4 +1,11 @@
-import { AmazonHourlyClient, buildOpportunities, cardMatches, isPreferred } from "./amazon.js";
+import {
+  AmazonHourlyClient,
+  buildOpportunities,
+  candidateProfiles,
+  cardMatches,
+  isPreferred,
+  matchingProfileOpportunities,
+} from "./amazon.js";
 import { WATCH_CONFIG } from "./config.js";
 import { sendNotification } from "./notification.js";
 
@@ -112,26 +119,33 @@ export class WatcherState {
 
     const opportunities = [];
     for (const card of matchingCards) {
+      const profiles = candidateProfiles(card);
       const detail = await client.fetchJobDetail(card.jobId);
       const schedules = await client.fetchSchedules(card.jobId);
       if (detail.postingStatus && detail.postingStatus !== "POSTED") continue;
-      opportunities.push(...buildOpportunities(card, detail, schedules, detectedAt));
+      for (const opportunity of buildOpportunities(card, detail, schedules, detectedAt)) {
+        opportunities.push(...matchingProfileOpportunities(opportunity, profiles));
+      }
     }
+    const profileOrder = new Map(WATCH_CONFIG.profiles.map((profile, index) => [profile.id, index]));
     opportunities.sort(
       (left, right) =>
+        profileOrder.get(left.profileId) - profileOrder.get(right.profileId) ||
         Number(isPreferred(right)) - Number(isPreferred(left)) ||
         (right.pay || 0) - (left.pay || 0) ||
         left.scheduleId.localeCompare(right.scheduleId),
     );
 
-    const seenKeys = opportunities.map((item) => `${SEEN_PREFIX}${item.scheduleId}`);
+    const seenKey = (item) => `${SEEN_PREFIX}${item.profileId}:${item.scheduleId}`;
+    const seenKeys = opportunities.map(seenKey);
     const seen = seenKeys.length ? await this.ctx.storage.get(seenKeys) : new Map();
-    const unseen = opportunities.filter(
-      (item) => !seen.has(`${SEEN_PREFIX}${item.scheduleId}`),
+    const unseen = opportunities.filter((item) => !seen.has(seenKey(item)));
+    const byProfileAndJob = Map.groupBy(
+      unseen,
+      (item) => `${item.profileId}:${item.jobId}`,
     );
-    const byJob = Map.groupBy(unseen, (item) => item.jobId);
     let notifications = 0;
-    for (const jobOpportunities of byJob.values()) {
+    for (const jobOpportunities of byProfileAndJob.values()) {
       await sendNotification(
         this.env,
         jobOpportunities,
@@ -140,9 +154,10 @@ export class WatcherState {
       const deliveredAt = new Date().toISOString();
       const records = Object.fromEntries(
         jobOpportunities.map((item) => [
-          `${SEEN_PREFIX}${item.scheduleId}`,
+          seenKey(item),
           {
             deliveredAt,
+            profileId: item.profileId,
             jobId: item.jobId,
             scheduleId: item.scheduleId,
             title: item.title,
@@ -155,8 +170,14 @@ export class WatcherState {
     }
     await this.pruneOldState(detectedAt);
     console.log(
-      `Watcher complete: ${opportunities.length} schedules, ${unseen.length} new, ` +
+      `Watcher complete: ${opportunities.length} eligible profile schedules, ${unseen.length} new, ` +
         `${notifications} notifications`,
+    );
+    const profileMatches = Object.fromEntries(
+      WATCH_CONFIG.profiles.map((profile) => [
+        profile.id,
+        opportunities.filter((item) => item.profileId === profile.id).length,
+      ]),
     );
     return {
       cards: cards.length,
@@ -164,6 +185,7 @@ export class WatcherState {
       matchingSchedules: opportunities.length,
       newSchedules: unseen.length,
       notifications,
+      profileMatches,
     };
   }
 

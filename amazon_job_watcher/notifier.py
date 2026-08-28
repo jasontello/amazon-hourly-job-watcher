@@ -24,16 +24,20 @@ def _schedule_line(opportunity: Opportunity) -> str:
     )
     return (
         f"- {opportunity.schedule_type} | {opportunity.schedule_text} | "
-        f"{hours} | {opportunity.pay_display} | starts {opportunity.first_day}"
+        f"{hours} | {opportunity.pay_display} | starts {opportunity.first_day}\n"
+        f"  {opportunity.fit_summary}"
     )
 
 
 def format_notification(opportunity: Opportunity) -> str:
     return "\n".join(
         (
+            opportunity.profile_label,
             opportunity.title,
             f"Location: {opportunity.location_name}",
+            *((f"Site: {', '.join(opportunity.site_ids)}",) if opportunity.site_ids else ()),
             f"Shift: {opportunity.schedule_type} | {opportunity.schedule_text}",
+            f"Why it fits: {opportunity.fit_summary}",
             (
                 f"Hours/type: "
                 f"{f'{opportunity.hours_per_week:g} hrs/week' if opportunity.hours_per_week is not None else 'Hours not listed'}"
@@ -55,8 +59,10 @@ def format_batch_notification(opportunities: list[Opportunity]) -> str:
         return format_notification(opportunities[0])
     first = opportunities[0]
     lines = [
+        first.profile_label,
         first.title,
         f"Location: {first.location_name}",
+        *([f"Site: {', '.join(first.site_ids)}"] if first.site_ids else []),
         f"{len(opportunities)} new selectable schedules:",
         *(_schedule_line(opportunity) for opportunity in opportunities),
         f"Employment: {', '.join(sorted({item.employment_type for item in opportunities}))}",
@@ -96,7 +102,7 @@ class NtfyNotifier:
         topic = urllib.parse.quote(self.topic, safe="")
         headers = {
             "Content-Type": "text/plain; charset=utf-8",
-            "Title": "Amazon Flex job available" if preferred else "Amazon warehouse job available",
+            "Title": "Preferred Amazon day job" if preferred else "Amazon day-shift job available",
             "Priority": "urgent" if preferred else "high",
             "Tags": "rotating_light,package" if preferred else "package",
             "Click": first.direct_application_url,
@@ -147,5 +153,11 @@ def test_notification(notifier: NtfyNotifier, now: datetime) -> None:
         posted_at=now.date().isoformat(),
         detected_at=now,
         first_day="Example only",
+        schedule_type_code="FLEX_TIME",
+        profile_id="test",
+        profile_label="Amazon watcher test",
+        fit_summary="Flex listing — verify daytime options before accepting.",
+        is_flexible=True,
+        preferred=True,
     )
     notifier.send(example, preferred=True)
