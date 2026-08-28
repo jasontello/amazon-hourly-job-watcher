@@ -8,7 +8,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .config import load_config
-from .notifier import NtfyNotifier, test_notification
+from .notifier import notifier_from_environment, test_notification
 from .runner import run
 
 
@@ -27,7 +27,7 @@ def parse_args() -> argparse.Namespace:
     mode.add_argument(
         "--test-notification",
         action="store_true",
-        help="Send one sample ntfy push without querying Amazon",
+        help="Send one sample push without querying Amazon",
     )
     return parser.parse_args()
 
@@ -42,7 +42,7 @@ def main() -> int:
         config = load_config(args.config.resolve())
         if args.test_notification:
             now = datetime.now(ZoneInfo(config.timezone))
-            test_notification(NtfyNotifier.from_environment(), now)
+            test_notification(notifier_from_environment(), now)
             logging.getLogger(__name__).info("Test notification sent")
             return 0
         run(config, dry_run=args.dry_run, baseline=args.baseline)
@@ -54,4 +54,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-

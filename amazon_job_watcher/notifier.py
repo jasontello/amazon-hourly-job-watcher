@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import urllib.error
@@ -135,7 +136,94 @@ class NtfyNotifier:
         )
 
 
-def test_notification(notifier: NtfyNotifier, now: datetime) -> None:
+class DiscordNotifier:
+    def __init__(self, webhook_url: str, timeout: float = 20) -> None:
+        self.webhook_url = webhook_url.strip()
+        self.timeout = timeout
+        parsed = urllib.parse.urlparse(self.webhook_url)
+        allowed_hosts = {
+            "discord.com",
+            "discordapp.com",
+            "canary.discord.com",
+            "ptb.discord.com",
+        }
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname not in allowed_hosts
+            or not parsed.path.startswith("/api/webhooks/")
+        ):
+            raise ValueError("DISCORD_WEBHOOK_URL must be an official Discord HTTPS webhook URL")
+
+    @classmethod
+    def from_environment(cls) -> "DiscordNotifier":
+        return cls(os.environ.get("DISCORD_WEBHOOK_URL", ""))
+
+    def send(self, opportunity: Opportunity, preferred: bool) -> None:
+        self.send_many([opportunity], preferred=preferred)
+
+    def send_many(self, opportunities: list[Opportunity], preferred: bool) -> None:
+        if not opportunities:
+            raise ValueError("At least one opportunity is required")
+        first = opportunities[0]
+        description = format_batch_notification(opportunities)
+        separator_index = description.rfind("\nApply")
+        if separator_index >= 0:
+            description = description[:separator_index]
+        title = "Preferred Amazon day job" if preferred else "Amazon day-shift job available"
+        payload = {
+            "username": "Amazon Job Watcher",
+            "content": f"**{title} — {first.profile_label}**",
+            "embeds": [
+                {
+                    "title": first.title,
+                    "url": first.direct_application_url,
+                    "description": description[:4096],
+                    "color": 0xFF9900 if preferred else 0x3498DB,
+                    "footer": {
+                        "text": (
+                            "Tap the title to apply on Amazon. "
+                            "The watcher never applies automatically."
+                        )
+                    },
+                }
+            ],
+            "allowed_mentions": {"parse": []},
+        }
+        query_separator = "&" if urllib.parse.urlparse(self.webhook_url).query else "?"
+        request = urllib.request.Request(
+            f"{self.webhook_url}{query_separator}wait=true",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                if response.status < 200 or response.status >= 300:
+                    raise NotificationError(f"Discord returned HTTP {response.status}")
+        except (urllib.error.URLError, TimeoutError) as error:
+            body = ""
+            if isinstance(error, urllib.error.HTTPError):
+                try:
+                    body = error.read(500).decode("utf-8", errors="replace")
+                except Exception:  # pragma: no cover - diagnostic best effort
+                    pass
+            raise NotificationError(
+                f"Could not send Discord notification: {error} {body}"
+            ) from error
+        LOGGER.info(
+            "Sent Discord notification for job %s (%d new schedules)",
+            first.job_id,
+            len(opportunities),
+        )
+
+
+def notifier_from_environment() -> DiscordNotifier | NtfyNotifier:
+    if os.environ.get("DISCORD_WEBHOOK_URL"):
+        return DiscordNotifier.from_environment()
+    return NtfyNotifier.from_environment()
+
+
+def test_notification(notifier: DiscordNotifier | NtfyNotifier, now: datetime) -> None:
     example = Opportunity(
         job_id="TEST-JOB",
         schedule_id="TEST-SCHEDULE",

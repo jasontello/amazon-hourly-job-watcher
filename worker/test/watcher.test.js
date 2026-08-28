@@ -13,6 +13,7 @@ import { WATCH_CONFIG } from "../src/config.js";
 import {
   directApplicationUrl,
   formatNotification,
+  sendDiscord,
   sendNotification,
 } from "../src/notification.js";
 
@@ -238,4 +239,46 @@ test("prefers Telegram when its secrets are configured", async () => {
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("uses a Discord webhook as the preferred notification provider", async () => {
+  const originalFetch = globalThis.fetch;
+  let requestedUrl = "";
+  let requestedBody;
+  globalThis.fetch = async (url, options) => {
+    requestedUrl = String(url);
+    requestedBody = JSON.parse(options.body);
+    return Response.json({ id: "message-123" });
+  };
+  try {
+    const jason = WATCH_CONFIG.profiles.find((profile) => profile.id === "jason");
+    const opportunities = [matchOpportunityToProfile(rawOpportunity(), jason)];
+    await sendNotification(
+      {
+        DISCORD_WEBHOOK_URL: "https://discord.com/api/webhooks/123456/secret-token",
+        TELEGRAM_BOT_TOKEN: "unused",
+        TELEGRAM_CHAT_ID: "unused",
+      },
+      opportunities,
+      false,
+    );
+    assert.equal(requestedUrl, "https://discord.com/api/webhooks/123456/secret-token?wait=true");
+    assert.match(requestedBody.content, /For Jason/);
+    assert.match(requestedBody.embeds[0].description, /other-job days available/i);
+    assert.match(requestedBody.embeds[0].url, /scheduleId=SCH-US-456/);
+    assert.deepEqual(requestedBody.allowed_mentions, { parse: [] });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("rejects a non-Discord webhook URL", async () => {
+  await assert.rejects(
+    sendDiscord(
+      { DISCORD_WEBHOOK_URL: "https://example.com/steal-secret" },
+      [{ profileLabel: "test" }],
+      false,
+    ),
+    /official Discord HTTPS webhook URL/,
+  );
 });

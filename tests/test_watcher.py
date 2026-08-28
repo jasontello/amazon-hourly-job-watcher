@@ -15,7 +15,11 @@ from amazon_job_watcher.amazon import (
     parse_schedule_text,
 )
 from amazon_job_watcher.config import load_config
-from amazon_job_watcher.notifier import format_batch_notification, format_notification
+from amazon_job_watcher.notifier import (
+    DiscordNotifier,
+    format_batch_notification,
+    format_notification,
+)
 from amazon_job_watcher.state import SeenState
 
 
@@ -229,6 +233,19 @@ class StateTests(unittest.TestCase):
             document = json.loads(path.read_text())
             self.assertEqual(document["seen"][opportunity.key]["job_id"], "JOB-US-1")
         self.assertEqual(config.state.retention_days, 365)
+
+
+class NotificationTests(unittest.TestCase):
+    def test_discord_notifier_requires_an_official_webhook(self) -> None:
+        with self.assertRaisesRegex(ValueError, "official Discord HTTPS webhook URL"):
+            DiscordNotifier("https://example.com/webhooks/not-discord")
+
+    def test_discord_notifier_accepts_the_official_endpoint(self) -> None:
+        notifier = DiscordNotifier("https://discord.com/api/webhooks/123456/secret-token")
+        self.assertEqual(
+            notifier.webhook_url,
+            "https://discord.com/api/webhooks/123456/secret-token",
+        )
 
 
 if __name__ == "__main__":

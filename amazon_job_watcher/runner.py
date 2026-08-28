@@ -15,7 +15,7 @@ from .amazon import (
     match_opportunity_to_profile,
 )
 from .config import Config
-from .notifier import NtfyNotifier
+from .notifier import notifier_from_environment
 from .state import SeenState
 
 LOGGER = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ def run(config: Config, *, dry_run: bool = False, baseline: bool = False) -> int
     detected_at = datetime.now(timezone)
     client = AmazonHourlyClient(config.api)
     state = SeenState(config.state.path)
-    notifier = None if dry_run or baseline else NtfyNotifier.from_environment()
+    notifier = None if dry_run or baseline else notifier_from_environment()
 
     cards = client.fetch_job_cards()
     matching_cards = [card for card in cards if card_matches(card, config)]

@@ -12,8 +12,8 @@ which schedules were already delivered, and pushes new matches to an iPhone. It 
 fills an application, or applies automatically.
 
 > **Production status:** the updated Worker is deployed, but its recurring cron remains paused
-> until a reliable Telegram notification destination is configured. The existing ntfy credentials
-> remain installed, but ntfy has rate-limited Cloudflare's shared outbound IP in production.
+> until a private Discord webhook is configured and tested. The existing ntfy credentials remain
+> installed, but ntfy has rate-limited Cloudflare's shared outbound IP in production.
 
 ## Matching rules
 
@@ -67,7 +67,7 @@ Cloudflare Cron Trigger (every 5 minutes when enabled)
   -> Amazon official hourly-jobs GraphQL feed
   -> profile, facility, schedule-type, time, and weekday filters
   -> compare with profile-scoped delivered-schedule state
-  -> Telegram push to iPhone (ntfy fallback supported)
+  -> private Discord channel push to iPhone (Telegram/ntfy fallbacks supported)
   -> store IDs only after successful delivery
 
 GitHub
@@ -77,29 +77,27 @@ GitHub
 Cloudflare is the continuous runtime because the Amazon feed has rejected GitHub-hosted runner
 traffic. The Worker uses web-platform APIs and has no production runtime dependencies.
 
-## Finish iPhone notifications with Telegram
+## Finish iPhone notifications with Discord
 
-Telegram is recommended because its bot delivery is not subject to ntfy's Cloudflare shared-IP
-quota.
+Discord is the preferred free provider. It needs no Discord bot or account credentials—only an
+incoming webhook that is limited to posting in one private channel.
 
-1. Install Telegram on the iPhone.
-2. Open the verified **@BotFather** chat and send `/newbot`.
-3. Follow its prompts and copy the bot token.
-4. Open the new bot's chat and send `/start` once.
-5. Store the token as an encrypted Cloudflare secret:
-
-   ```bash
-   npx wrangler secret put TELEGRAM_BOT_TOKEN
-   ```
-
-6. Obtain the numeric chat ID from Telegram's `getUpdates` response and store it:
+1. Create a private Discord server named **Amazon Job Alerts**.
+2. Create or rename a text channel to **amazon-job-alerts**.
+3. Open **Server Settings → Integrations → Webhooks → New Webhook**.
+4. Name it **Amazon Job Watcher**, select the alert channel, and copy its webhook URL.
+5. Store that URL as an encrypted Cloudflare secret:
 
    ```bash
-   npx wrangler secret put TELEGRAM_CHAT_ID
+   npx wrangler secret put DISCORD_WEBHOOK_URL
    ```
 
-Do not commit or paste the bot token into an issue, README, or chat. When both secrets exist, the
-Worker automatically uses Telegram and adds an **Apply now** button.
+6. On the iPhone, enable mobile push for the server and set the alert channel's notification
+   override to **All Messages**.
+
+Treat the webhook URL like a password. Do not commit it or paste it into an issue, README, or chat.
+When present, Discord takes priority over the existing Telegram and ntfy fallbacks. Alerts use a
+rich embed whose title opens the exact Amazon application schedule.
 
 ## Deploy or reactivate
 
@@ -124,7 +122,7 @@ The current [`wrangler.jsonc`](wrangler.jsonc) intentionally contains:
 "triggers": { "crons": [] }
 ```
 
-After Telegram is tested successfully, reactivate five-minute checks by changing it to:
+After Discord is tested successfully, reactivate five-minute checks by changing it to:
 
 ```jsonc
 "triggers": { "crons": ["*/5 * * * *"] }
@@ -202,8 +200,8 @@ push or modify `state/seen_jobs.json`. Its state is separate from Cloudflare pro
 Additional commands:
 
 ```bash
-# Send one ntfy test push from the local Python client
-NTFY_TOPIC='your-topic' python3 -m amazon_job_watcher --test-notification
+# Send one Discord test push from the local Python client
+DISCORD_WEBHOOK_URL='your-secret-webhook' python3 -m amazon_job_watcher --test-notification
 
 # Record current local matches without notifying
 python3 -m amazon_job_watcher --baseline
@@ -236,12 +234,12 @@ last run's status and counts by profile. Positions may fill between detection an
 ## Cost and data-source limitations
 
 At this personal polling rate, the watcher is designed to fit Cloudflare's free allowances. Review
-Cloudflare's current plan screen before accepting any paid upgrade. Telegram bot messaging is free;
-ntfy also has a free hosted tier but its shared-IP quota was unreliable from this Worker.
+Cloudflare's current plan screen before accepting any paid upgrade. Discord webhooks are free; ntfy
+also has a free hosted tier but its shared-IP quota was unreliable from this Worker.
 
 The source is `https://hiring.amazon.com/graphql`, the structured feed used by Amazon's official
 hourly hiring site. Amazon may publish only a posting date rather than a precise timestamp; every
 alert therefore includes both Amazon's value and the watcher's precise detection time.
 
-This independent project is not affiliated with or endorsed by Amazon, Cloudflare, Telegram, or
-ntfy. Use it responsibly and follow the applicable site and service terms.
+This independent project is not affiliated with or endorsed by Amazon, Cloudflare, Discord,
+Telegram, or ntfy. Use it responsibly and follow the applicable site and service terms.

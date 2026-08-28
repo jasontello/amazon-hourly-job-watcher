@@ -118,7 +118,46 @@ export async function sendTelegram(env, opportunities, preferred) {
   }
 }
 
+export async function sendDiscord(env, opportunities, preferred) {
+  const webhookUrl = String(env.DISCORD_WEBHOOK_URL || "").trim();
+  if (!/^https:\/\/(?:canary\.|ptb\.)?discord(?:app)?\.com\/api\/webhooks\//.test(webhookUrl)) {
+    throw new Error("DISCORD_WEBHOOK_URL must be an official Discord HTTPS webhook URL");
+  }
+  const first = opportunities[0];
+  const applicationUrl = directApplicationUrl(first);
+  const title = preferred ? "Preferred Amazon day job" : "Amazon day-shift job available";
+  const description = formatNotification(opportunities);
+  const separator = description.lastIndexOf("\nApply");
+  const withoutApplyLine = separator >= 0 ? description.slice(0, separator) : description;
+  const response = await fetch(`${webhookUrl}?wait=true`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      username: "Amazon Job Watcher",
+      content: `**${title} — ${first.profileLabel}**`,
+      embeds: [
+        {
+          title: first.title,
+          url: applicationUrl,
+          description: withoutApplyLine.slice(0, 4_096),
+          color: preferred ? 0xff9900 : 0x3498db,
+          footer: { text: "Tap the title to apply on Amazon. The watcher never applies automatically." },
+        },
+      ],
+      allowed_mentions: { parse: [] },
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(
+      `Discord returned HTTP ${response.status}: ${(await response.text()).slice(0, 500)}`,
+    );
+  }
+}
+
 export async function sendNotification(env, opportunities, preferred) {
+  if (env.DISCORD_WEBHOOK_URL) {
+    return sendDiscord(env, opportunities, preferred);
+  }
   if (env.TELEGRAM_BOT_TOKEN || env.TELEGRAM_CHAT_ID) {
     return sendTelegram(env, opportunities, preferred);
   }
