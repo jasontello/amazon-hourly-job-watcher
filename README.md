@@ -4,8 +4,9 @@ A hosted, notification-only watcher for two Amazon warehouse job searches:
 
 - **Jason:** Oakley or Vacaville, California; part-time or Flex/FlexPT; compatible with a
   three-day Digital NEST schedule chosen from Tuesday through Friday.
-- **Friend:** the exact **DSM4** delivery station at 3620 Ramos Drive in West Sacramento; any
-  sleep-safe/day schedule, with full-time openings marked preferred.
+- **Kevin:** **DSM4** at 3620 Ramos Drive, **HSM1** at 3640 Ramos Drive, or another Amazon listing
+  explicitly located on Ramos Drive in West Sacramento; confirmed full-time, sleep-safe/day
+  schedules only.
 
 It reads Amazon's official hourly hiring feed, evaluates every selectable schedule, remembers
 which schedules were already delivered, and pushes new matches to an iPhone. It never signs in,
@@ -13,7 +14,8 @@ fills an application, or applies automatically.
 
 > **Production status:** active. The Worker checks every five minutes and sends direct-mention
 > alerts to the verified private Discord channel. The existing ntfy credentials remain installed
-> as a fallback, but ntfy previously rate-limited Cloudflare's shared outbound IP.
+> as a fallback, but ntfy previously rate-limited Cloudflare's shared outbound IP. Kevin's email
+> route remains pending until the one-time Google Apps Script authorization below is completed.
 
 ## Matching rules
 
@@ -38,11 +40,15 @@ Examples:
 `Flexible Shifts` listings are accepted because their exact days and times are selected later.
 Their alert explicitly says to verify that daytime choices are actually available before accepting.
 
-### Friend — DSM4 West Sacramento
+### Kevin — Ramos Drive, West Sacramento
 
-The job must resolve to Amazon's exact `SITE-DSM4` facility identifier. Matching by this identifier
-avoids notifying for other Amazon buildings in West Sacramento. All employment types are allowed,
-the same sleep-safe time window is enforced, and `FULL_TIME` alerts receive preferred priority.
+The job must be in West Sacramento and match `DSM4`, `HSM1`, or an address containing Ramos Drive.
+Amazon's own facility list maps DSM4 to 3620 Ramos Drive and HSM1 to 3640 Ramos Drive, so HSM1 is
+the defined nearby same-block facility. Other West Sacramento buildings are rejected.
+
+Only schedules classified as `FULL_TIME` are allowed. Flexible, part-time, and unknown-hour listings
+are rejected for this profile: every emailed schedule must list fixed hours that pass the shared
+sleep-safe window and do not cross midnight.
 
 ## Notification contents
 
@@ -68,7 +74,8 @@ Cloudflare Cron Trigger (every 5 minutes when enabled)
   -> profile, facility, schedule-type, time, and weekday filters
   -> compare with profile-scoped delivered-schedule state
   -> private Discord channel push to iPhone (Telegram/ntfy fallbacks supported)
-  -> store IDs only after successful delivery
+  -> authenticated Google Apps Script bridge -> email from Jason's Google account to Kevin
+  -> store a separate delivered ID after each channel succeeds
 
 GitHub
   -> source control + Node/Python tests + Worker bundle validation
@@ -105,6 +112,47 @@ incoming webhook that is limited to posting in one private channel.
 Treat the webhook URL like a password. Do not commit it or paste it into an issue, README, or chat.
 When present, Discord takes priority over the existing Telegram and ntfy fallbacks. Alerts use a
 rich embed whose title opens the exact Amazon application schedule.
+
+## Enable Kevin's email alerts (free)
+
+Cloudflare Workers cannot sign in to Gmail directly. The included
+[`Code.gs`](apps-script-email-bridge/Code.gs) is a minimal Google Apps Script bridge that can only
+send email; it does not read the account's inbox. The recipient stays in Google Script Properties
+and is not committed to this repository.
+
+1. Sign in to the Google account that should appear as the sender, open
+   [script.new](https://script.new), and name the project **Amazon Job Watcher Email Bridge**.
+2. Replace the editor contents with the complete contents of
+   [`apps-script-email-bridge/Code.gs`](apps-script-email-bridge/Code.gs), then save.
+3. Open **Project Settings → Script properties → Add script property** and create:
+
+   - `ALERT_RECIPIENT`: Kevin's email address.
+   - `WEBHOOK_SECRET`: a random value of at least 32 characters. Store the same value in
+     Cloudflare with `npx wrangler secret put EMAIL_WEBHOOK_SECRET`.
+
+4. Choose **Deploy → New deployment → Web app**. Set **Execute as: Me** and
+   **Who has access: Anyone**, then deploy and approve the send-email permission.
+5. Copy the `/exec` web-app URL. Store it as an encrypted Cloudflare secret:
+
+   ```bash
+   npx wrangler secret put EMAIL_WEBHOOK_URL
+   ```
+
+The public endpoint is protected by the long shared secret, only accepts bounded message payloads,
+and remembers delivery IDs to suppress retries. The Worker also refuses to send that secret to any
+host except an official `script.google.com/macros/s/.../exec` URL.
+
+To avoid spam, schedules are deduplicated by Amazon schedule ID for each delivery channel, all new
+schedules under one posting are batched into a single message, and the email bridge rejects a replay
+of the same delivery ID. A schedule is eligible for Kevin only once Amazon explicitly labels it
+`FULL_TIME` and provides fixed daytime hours.
+
+Google documents that [`MailApp` sends email without accessing the
+inbox](https://developers.google.com/apps-script/reference/mail/mail-app) and that consumer accounts
+have a [daily quota of 100 recipients](https://developers.google.com/apps-script/guides/services/quotas),
+which is ample for this low-volume watcher. No test or real email is sent until both Cloudflare
+secrets are installed. Once enabled, a failed email remains pending without causing the
+already-successful Discord notification to repeat.
 
 ## Deploy or reactivate
 
@@ -159,9 +207,10 @@ exact bearer token is supplied.
 
 ## Change locations, schedules, or keywords
 
-Edit [`config.json`](config.json). Each entry in `profiles` has independent locations, exact
-facility IDs, keywords, allowed schedule types, preferred schedule types, and optional other-job
-availability. The shared `day_shift_policy` controls acceptable fixed-shift hours.
+Edit [`config.json`](config.json). Each entry in `profiles` has independent locations, facility
+matching, keywords, allowed schedule types, preferred schedule types, flexible-shift policy,
+notification channels, and optional other-job availability. The shared `day_shift_policy` controls
+acceptable fixed-shift hours.
 
 Important fields:
 
@@ -171,9 +220,11 @@ Important fields:
     {
       "id": "jason",
       "locations": [{ "city": "Oakley", "state": "CA" }],
-      "required_site_ids": [],
+      "facility_match": null,
       "allowed_schedule_types": ["PART_TIME", "FLEX_TIME"],
       "preferred_schedule_types": ["FLEX_TIME"],
+      "allow_flexible_shifts": true,
+      "notification_channels": ["push"],
       "other_job_availability": {
         "candidate_days": ["Tue", "Wed", "Thu", "Fri"],
         "required_free_days": 3
@@ -221,15 +272,16 @@ python3 -m amazon_job_watcher --config path/to/config.json --dry-run
 
 - **Strongly consistent coordination:** one Durable Object and a transactional run lease prevent
   overlapping checks.
-- **Profile-scoped deduplication:** successful deliveries are keyed by profile plus Amazon schedule
-  ID.
-- **Safe delivery ordering:** schedule IDs are stored only after the push provider succeeds; a
-  failed push is retried on the next run.
+- **Channel-scoped deduplication:** successful deliveries are keyed by channel, profile, and Amazon
+  schedule ID, so an email retry cannot duplicate a successful Discord push.
+- **Safe delivery ordering:** each channel's schedule IDs are stored only after that channel
+  succeeds; failed delivery is retried on the next run.
 - **Rate limiting:** Amazon requests are at least one second apart, with bounded exponential retry
   and jitter for temporary failures.
 - **Strict parsing:** unknown, malformed, overnight, too-early, and too-late fixed schedules fail
   closed rather than creating misleading alerts.
-- **Exact facility matching:** the friend's search requires Amazon's DSM4 identifier.
+- **Bounded facility matching:** Kevin's search accepts DSM4, same-block HSM1, or an explicit Ramos
+  Drive address while rejecting unrelated West Sacramento sites.
 - **State retention:** delivered records expire after 365 days.
 - **Secrets:** notification and manual-run credentials are encrypted Cloudflare secrets and never
   stored in source control.
@@ -241,8 +293,9 @@ last run's status and counts by profile. Positions may fill between detection an
 ## Cost and data-source limitations
 
 At this personal polling rate, the watcher is designed to fit Cloudflare's free allowances. Review
-Cloudflare's current plan screen before accepting any paid upgrade. Discord webhooks are free; ntfy
-also has a free hosted tier but its shared-IP quota was unreliable from this Worker.
+Cloudflare's current plan screen before accepting any paid upgrade. Discord webhooks and the Google
+Apps Script email bridge are free at this watcher's expected volume; ntfy also has a free hosted
+tier but its shared-IP quota was unreliable from this Worker.
 
 The source is `https://hiring.amazon.com/graphql`, the structured feed used by Amazon's official
 hourly hiring site. Amazon may publish only a posting date rather than a precise timestamp; every

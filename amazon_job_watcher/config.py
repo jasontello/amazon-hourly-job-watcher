@@ -19,14 +19,22 @@ class OtherJobAvailability:
 
 
 @dataclass(frozen=True)
+class FacilityMatch:
+    site_ids: tuple[str, ...]
+    address_contains: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class Profile:
     id: str
     label: str
     locations: tuple[Location, ...]
-    required_site_ids: tuple[str, ...]
+    facility_match: FacilityMatch | None
     include_keywords: tuple[str, ...]
     allowed_schedule_types: tuple[str, ...]
     preferred_schedule_types: tuple[str, ...]
+    allow_flexible_shifts: bool
+    notification_channels: tuple[str, ...]
     other_job_availability: OtherJobAvailability | None
 
 
@@ -134,16 +142,41 @@ def load_config(path: Path) -> Config:
                 raise ValueError(f"Profile '{profile_id}' has invalid other-job availability")
             availability = OtherJobAvailability(candidate_days, required_free_days)
 
+        facility_raw = profile_raw.get("facility_match")
+        facility_match = None
+        if facility_raw is not None:
+            if not isinstance(facility_raw, dict):
+                raise ValueError("facility_match must be an object or null")
+            site_ids = tuple(
+                str(value).strip().upper()
+                for value in _required(facility_raw, "site_ids", list)
+                if str(value).strip()
+            )
+            address_contains = tuple(
+                str(value).strip().casefold()
+                for value in _required(facility_raw, "address_contains", list)
+                if str(value).strip()
+            )
+            if not site_ids and not address_contains:
+                raise ValueError(f"Profile '{profile_id}' has an empty facility_match")
+            facility_match = FacilityMatch(site_ids, address_contains)
+
+        notification_channels = tuple(
+            str(value).strip().casefold()
+            for value in _required(profile_raw, "notification_channels", list)
+            if str(value).strip()
+        )
+        if not notification_channels or any(
+            channel not in {"push", "email"} for channel in notification_channels
+        ):
+            raise ValueError(f"Profile '{profile_id}' has invalid notification channels")
+
         profiles.append(
             Profile(
                 id=profile_id,
                 label=label,
                 locations=tuple(locations),
-                required_site_ids=tuple(
-                    str(value).strip().upper()
-                    for value in _required(profile_raw, "required_site_ids", list)
-                    if str(value).strip()
-                ),
+                facility_match=facility_match,
                 include_keywords=include_keywords,
                 allowed_schedule_types=tuple(
                     str(value).strip().upper()
@@ -155,6 +188,13 @@ def load_config(path: Path) -> Config:
                     for value in _required(profile_raw, "preferred_schedule_types", list)
                     if str(value).strip()
                 ),
+                allow_flexible_shifts=bool(
+                    profile_raw.get(
+                        "allow_flexible_shifts",
+                        raw.get("day_shift_policy", {}).get("allow_flexible_shifts", False),
+                    )
+                ),
+                notification_channels=notification_channels,
                 other_job_availability=availability,
             )
         )

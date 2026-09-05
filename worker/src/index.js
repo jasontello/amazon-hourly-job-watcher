@@ -7,7 +7,7 @@ import {
   matchingProfileOpportunities,
 } from "./amazon.js";
 import { WATCH_CONFIG } from "./config.js";
-import { sendNotification } from "./notification.js";
+import { sendEmail, sendNotification } from "./notification.js";
 
 const STATE_ID = "oakley-vacaville-amazon-watcher";
 const LEASE_KEY = "run:lease";
@@ -136,42 +136,84 @@ export class WatcherState {
         left.scheduleId.localeCompare(right.scheduleId),
     );
 
-    const seenKey = (item) => `${SEEN_PREFIX}${item.profileId}:${item.scheduleId}`;
-    const seenKeys = opportunities.map(seenKey);
-    const seen = seenKeys.length ? await this.ctx.storage.get(seenKeys) : new Map();
-    const unseen = opportunities.filter((item) => !seen.has(seenKey(item)));
+    const profileById = new Map(WATCH_CONFIG.profiles.map((profile) => [profile.id, profile]));
+    const channelSeenKey = (channel, item) =>
+      `${SEEN_PREFIX}${channel}:${item.profileId}:${item.scheduleId}`;
+    const legacySeenKey = (item) => `${SEEN_PREFIX}${item.profileId}:${item.scheduleId}`;
     const byProfileAndJob = Map.groupBy(
-      unseen,
+      opportunities,
       (item) => `${item.profileId}:${item.jobId}`,
     );
     let notifications = 0;
+    let pushNotifications = 0;
+    let emailNotifications = 0;
+    let emailPendingSchedules = 0;
+    const newScheduleKeys = new Set();
     for (const jobOpportunities of byProfileAndJob.values()) {
-      await sendNotification(
-        this.env,
-        jobOpportunities,
-        jobOpportunities.some((item) => isPreferred(item)),
-      );
-      const deliveredAt = new Date().toISOString();
-      const records = Object.fromEntries(
-        jobOpportunities.map((item) => [
-          seenKey(item),
-          {
-            deliveredAt,
-            profileId: item.profileId,
-            jobId: item.jobId,
-            scheduleId: item.scheduleId,
-            title: item.title,
-            location: item.location,
-          },
-        ]),
-      );
-      await this.ctx.storage.put(records);
-      notifications += 1;
+      const profile = profileById.get(jobOpportunities[0].profileId);
+      if (!profile) throw new Error(`Unknown profile ${jobOpportunities[0].profileId}`);
+      for (const channel of profile.notificationChannels) {
+        const keys = jobOpportunities.flatMap((item) => [
+          channelSeenKey(channel, item),
+          ...(channel === "push" ? [legacySeenKey(item)] : []),
+        ]);
+        const seen = keys.length ? await this.ctx.storage.get(keys) : new Map();
+        const channelOpportunities = jobOpportunities.filter(
+          (item) =>
+            !seen.has(channelSeenKey(channel, item)) &&
+            !(channel === "push" && seen.has(legacySeenKey(item))),
+        );
+        if (!channelOpportunities.length) continue;
+        channelOpportunities.forEach((item) =>
+          newScheduleKeys.add(`${item.profileId}:${item.scheduleId}`),
+        );
+
+        if (
+          channel === "email" &&
+          (!this.env.EMAIL_WEBHOOK_URL || !this.env.EMAIL_WEBHOOK_SECRET)
+        ) {
+          emailPendingSchedules += channelOpportunities.length;
+          console.warn(
+            `Email delivery is pending configuration for ${channelOpportunities.length} schedules`,
+          );
+          continue;
+        }
+
+        const preferred = channelOpportunities.some((item) => isPreferred(item));
+        if (channel === "push") {
+          await sendNotification(this.env, channelOpportunities, preferred);
+          pushNotifications += 1;
+        } else if (channel === "email") {
+          await sendEmail(this.env, channelOpportunities);
+          emailNotifications += 1;
+        } else {
+          throw new Error(`Unsupported notification channel: ${channel}`);
+        }
+
+        const deliveredAt = new Date().toISOString();
+        const records = Object.fromEntries(
+          channelOpportunities.map((item) => [
+            channelSeenKey(channel, item),
+            {
+              channel,
+              deliveredAt,
+              profileId: item.profileId,
+              jobId: item.jobId,
+              scheduleId: item.scheduleId,
+              title: item.title,
+              location: item.location,
+            },
+          ]),
+        );
+        await this.ctx.storage.put(records);
+        notifications += 1;
+      }
     }
     await this.pruneOldState(detectedAt);
     console.log(
-      `Watcher complete: ${opportunities.length} eligible profile schedules, ${unseen.length} new, ` +
-        `${notifications} notifications`,
+      `Watcher complete: ${opportunities.length} eligible profile schedules, ` +
+        `${newScheduleKeys.size} new, ${pushNotifications} push and ` +
+        `${emailNotifications} email notifications`,
     );
     const profileMatches = Object.fromEntries(
       WATCH_CONFIG.profiles.map((profile) => [
@@ -183,8 +225,11 @@ export class WatcherState {
       cards: cards.length,
       matchingJobs: matchingCards.length,
       matchingSchedules: opportunities.length,
-      newSchedules: unseen.length,
+      newSchedules: newScheduleKeys.size,
       notifications,
+      pushNotifications,
+      emailNotifications,
+      emailPendingSchedules,
       profileMatches,
     };
   }

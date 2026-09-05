@@ -5,10 +5,18 @@ export const WATCH_CONFIG = Object.freeze({
     id: profile.id,
     label: profile.label,
     locations: profile.locations,
-    requiredSiteIds: profile.required_site_ids,
+    facilityMatch: profile.facility_match
+      ? {
+          siteIds: profile.facility_match.site_ids,
+          addressContains: profile.facility_match.address_contains,
+        }
+      : null,
     includeKeywords: profile.include_keywords,
     allowedScheduleTypes: profile.allowed_schedule_types,
     preferredScheduleTypes: profile.preferred_schedule_types,
+    allowFlexibleShifts:
+      profile.allow_flexible_shifts ?? userConfig.day_shift_policy.allow_flexible_shifts,
+    notificationChannels: profile.notification_channels ?? ["push"],
     otherJobAvailability: profile.other_job_availability
       ? {
           candidateDays: profile.other_job_availability.candidate_days,

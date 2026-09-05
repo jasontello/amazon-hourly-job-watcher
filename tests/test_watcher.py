@@ -68,6 +68,7 @@ class MatchingTests(unittest.TestCase):
         *,
         city: str = "Oakley",
         site_ids: list[str] | None = None,
+        site_address: str | None = None,
         schedule_type: str = "PART_TIME",
         schedule_type_label: str = "Part Time",
         schedule_text: str = "Sun, Mon, Tue 7:00 AM - 5:00 PM",
@@ -82,7 +83,11 @@ class MatchingTests(unittest.TestCase):
             "locationName": f"{city}, CA",
             "jobTypeL10N": schedule_type_label,
         }
-        detail = {"mostRecentPostedDate": "2026-08-23", "siteId": site_ids or []}
+        detail = {
+            "mostRecentPostedDate": "2026-08-23",
+            "siteId": site_ids or [],
+            "fullAddress": site_address,
+        }
         schedules = [
             {
                 "scheduleId": "SCH-US-456",
@@ -163,8 +168,10 @@ class MatchingTests(unittest.TestCase):
         self.assertIn("$22.50/hour", message)
         self.assertIn("Posted by Amazon: 2026-08-23", message)
 
-    def test_requires_exact_dsm4_and_prefers_full_time(self) -> None:
-        friend = next(profile for profile in self.config.profiles if profile.id == "friend_dsm4")
+    def test_matches_dsm4_hsm1_or_ramos_drive_and_prefers_full_time(self) -> None:
+        friend = next(
+            profile for profile in self.config.profiles if profile.id == "friend_dsm4"
+        )
         opportunity = match_opportunity_to_profile(
             self.raw_opportunity(
                 city="West Sacramento",
@@ -180,9 +187,76 @@ class MatchingTests(unittest.TestCase):
         assert opportunity is not None
         self.assertTrue(is_preferred(opportunity, self.config))
         self.assertIn("SITE-DSM4", format_notification(opportunity))
+        self.assertIsNotNone(
+            match_opportunity_to_profile(
+                self.raw_opportunity(
+                    city="West Sacramento",
+                    site_ids=["HSM1"],
+                    schedule_type="FULL_TIME",
+                    schedule_type_label="Full Time",
+                ),
+                friend,
+                self.config,
+            )
+        )
+        self.assertIsNotNone(
+            match_opportunity_to_profile(
+                self.raw_opportunity(
+                    city="West Sacramento",
+                    site_ids=["UNKNOWN"],
+                    site_address="3620 Ramos Dr., West Sacramento, CA 95691",
+                    schedule_type="FULL_TIME",
+                    schedule_type_label="Full Time",
+                ),
+                friend,
+                self.config,
+            )
+        )
         self.assertIsNone(
             match_opportunity_to_profile(
                 self.raw_opportunity(city="West Sacramento", site_ids=["SITE-DSM1"]),
+                friend,
+                self.config,
+            )
+        )
+
+    def test_friend_rejects_flexible_shifts_with_unknown_hours(self) -> None:
+        friend = next(
+            profile for profile in self.config.profiles if profile.id == "friend_dsm4"
+        )
+
+    def test_friend_only_accepts_full_time_schedules(self) -> None:
+        friend = next(
+            profile for profile in self.config.profiles if profile.id == "friend_dsm4"
+        )
+        self.assertIsNone(
+            match_opportunity_to_profile(
+                self.raw_opportunity(city="West Sacramento", site_ids=["DSM4"]),
+                friend,
+                self.config,
+            )
+        )
+        self.assertIsNotNone(
+            match_opportunity_to_profile(
+                self.raw_opportunity(
+                    city="West Sacramento",
+                    site_ids=["DSM4"],
+                    schedule_type="FULL_TIME",
+                    schedule_type_label="Full Time",
+                ),
+                friend,
+                self.config,
+            )
+        )
+        self.assertIsNone(
+            match_opportunity_to_profile(
+                self.raw_opportunity(
+                    city="West Sacramento",
+                    site_ids=["DSM4"],
+                    schedule_type="FLEX_TIME",
+                    schedule_type_label="Flexible Shifts",
+                    schedule_text="Flexible Shifts",
+                ),
                 friend,
                 self.config,
             )

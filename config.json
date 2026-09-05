@@ -7,7 +7,7 @@
         { "city": "Oakley", "state": "CA" },
         { "city": "Vacaville", "state": "CA" }
       ],
-      "required_site_ids": [],
+      "facility_match": null,
       "include_keywords": [
         "warehouse",
         "fulfillment center",
@@ -17,6 +17,8 @@
       ],
       "allowed_schedule_types": ["PART_TIME", "FLEX_TIME"],
       "preferred_schedule_types": ["FLEX_TIME"],
+      "allow_flexible_shifts": true,
+      "notification_channels": ["push"],
       "other_job_availability": {
         "candidate_days": ["Tue", "Wed", "Thu", "Fri"],
         "required_free_days": 3
@@ -24,11 +26,14 @@
     },
     {
       "id": "friend_dsm4",
-      "label": "For friend — DSM4 West Sacramento",
+      "label": "For Kevin — Ramos Drive, West Sacramento",
       "locations": [
         { "city": "West Sacramento", "state": "CA" }
       ],
-      "required_site_ids": ["SITE-DSM4"],
+      "facility_match": {
+        "site_ids": ["DSM4", "HSM1"],
+        "address_contains": ["Ramos Drive"]
+      },
       "include_keywords": [
         "warehouse",
         "fulfillment center",
@@ -36,8 +41,10 @@
         "delivery station",
         "package sorter"
       ],
-      "allowed_schedule_types": [],
+      "allowed_schedule_types": ["FULL_TIME"],
       "preferred_schedule_types": ["FULL_TIME"],
+      "allow_flexible_shifts": false,
+      "notification_channels": ["push", "email"],
       "other_job_availability": null
     }
   ],

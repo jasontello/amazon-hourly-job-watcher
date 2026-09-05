@@ -12,8 +12,10 @@ import {
 import { WATCH_CONFIG } from "../src/config.js";
 import {
   directApplicationUrl,
+  formatEmailPayload,
   formatNotification,
   sendDiscord,
+  sendEmail,
   sendNotification,
 } from "../src/notification.js";
 
@@ -67,6 +69,7 @@ function rawOpportunity({
   city = "Oakley",
   state = "CA",
   siteId = [],
+  siteAddress = null,
   scheduleType = "PART_TIME",
   scheduleTypeL10N = "Part Time",
   scheduleText = "Sun, Mon, Tue 7:00 AM - 5:00 PM",
@@ -81,7 +84,7 @@ function rawOpportunity({
       locationName: `${city}, ${state}`,
       jobTypeL10N: scheduleTypeL10N,
     },
-    { mostRecentPostedDate: "2026-08-23", siteId },
+    { mostRecentPostedDate: "2026-08-23", siteId, fullAddress: siteAddress },
     [
       {
         scheduleId: "SCH-US-456",
@@ -154,7 +157,7 @@ test("allows Flex for Jason but labels its unknown hours for verification", () =
   assert.match(formatNotification([opportunity]), /\$22.50\/hour/);
 });
 
-test("requires exact DSM4 site and prefers its full-time day shift", () => {
+test("matches DSM4, same-block HSM1, or a Ramos Drive address", () => {
   const friend = WATCH_CONFIG.profiles.find((profile) => profile.id === "friend_dsm4");
   const opportunity = matchOpportunityToProfile(
     rawOpportunity({
@@ -170,12 +173,74 @@ test("requires exact DSM4 site and prefers its full-time day shift", () => {
   assert.equal(opportunity.profileId, "friend_dsm4");
   assert.equal(isPreferred(opportunity), true);
   assert.match(formatNotification([opportunity]), /SITE-DSM4/);
+  assert.ok(
+    matchOpportunityToProfile(
+      rawOpportunity({
+        city: "West Sacramento",
+        siteId: ["HSM1"],
+        scheduleType: "FULL_TIME",
+        scheduleTypeL10N: "Full Time",
+      }),
+      friend,
+    ),
+  );
+  assert.ok(
+    matchOpportunityToProfile(
+      rawOpportunity({
+        city: "West Sacramento",
+        siteId: ["UNKNOWN"],
+        siteAddress: "3620 Ramos Dr., West Sacramento, CA 95691",
+        scheduleType: "FULL_TIME",
+        scheduleTypeL10N: "Full Time",
+      }),
+      friend,
+    ),
+  );
   assert.equal(
     matchOpportunityToProfile(
       rawOpportunity({ city: "West Sacramento", siteId: ["SITE-DSM1"] }),
       friend,
     ),
     null,
+  );
+});
+
+test("friend profile rejects flexible shifts because only confirmed day shifts qualify", () => {
+  const friend = WATCH_CONFIG.profiles.find((profile) => profile.id === "friend_dsm4");
+  assert.equal(
+    matchOpportunityToProfile(
+      rawOpportunity({
+        city: "West Sacramento",
+        siteId: ["DSM4"],
+        scheduleType: "FLEX_TIME",
+        scheduleTypeL10N: "Flexible Shifts",
+        scheduleText: "Flexible Shifts",
+      }),
+      friend,
+    ),
+    null,
+  );
+});
+
+test("friend profile only accepts full-time schedules", () => {
+  const friend = WATCH_CONFIG.profiles.find((profile) => profile.id === "friend_dsm4");
+  assert.equal(
+    matchOpportunityToProfile(
+      rawOpportunity({ city: "West Sacramento", siteId: ["DSM4"] }),
+      friend,
+    ),
+    null,
+  );
+  assert.ok(
+    matchOpportunityToProfile(
+      rawOpportunity({
+        city: "West Sacramento",
+        siteId: ["DSM4"],
+        scheduleType: "FULL_TIME",
+        scheduleTypeL10N: "Full Time",
+      }),
+      friend,
+    ),
   );
 });
 
@@ -298,5 +363,69 @@ test("rejects an invalid Discord user ID", async () => {
       false,
     ),
     /17-20 digit Discord user ID/,
+  );
+});
+
+test("sends a friend alert through the authenticated Google Apps Script bridge", async () => {
+  const originalFetch = globalThis.fetch;
+  let requestedUrl = "";
+  let requestedBody;
+  globalThis.fetch = async (url, options) => {
+    requestedUrl = String(url);
+    requestedBody = JSON.parse(options.body);
+    return Response.json({ ok: true, duplicate: false });
+  };
+  try {
+    const friend = WATCH_CONFIG.profiles.find(
+      (profile) => profile.id === "friend_dsm4",
+    );
+    const opportunities = [
+      matchOpportunityToProfile(
+        rawOpportunity({
+          city: "West Sacramento",
+          siteId: ["DSM4"],
+          siteAddress: "3620 Ramos Drive, West Sacramento, CA 95691",
+          scheduleType: "FULL_TIME",
+          scheduleTypeL10N: "Full Time",
+        }),
+        friend,
+      ),
+    ];
+    await sendEmail(
+      {
+        EMAIL_WEBHOOK_URL: "https://script.google.com/macros/s/test-deployment/exec",
+        EMAIL_WEBHOOK_SECRET: "a".repeat(32),
+      },
+      opportunities,
+    );
+    assert.equal(
+      requestedUrl,
+      "https://script.google.com/macros/s/test-deployment/exec",
+    );
+    assert.equal(requestedBody.secret, "a".repeat(32));
+    assert.match(requestedBody.deliveryId, /friend_dsm4:JOB-US-123:SCH-US-456/);
+    assert.match(requestedBody.subject, /Amazon day shift/);
+    assert.match(requestedBody.text, /Jason asked me to alert you/);
+    assert.match(requestedBody.html, /Apply on Amazon/);
+    assert.equal(Object.hasOwn(requestedBody, "to"), false);
+    assert.deepEqual(
+      formatEmailPayload(opportunities, "b".repeat(32)).deliveryId,
+      requestedBody.deliveryId,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("email bridge only accepts official Apps Script deployment URLs", async () => {
+  await assert.rejects(
+    sendEmail(
+      {
+        EMAIL_WEBHOOK_URL: "https://example.com/collect-secret",
+        EMAIL_WEBHOOK_SECRET: "a".repeat(32),
+      },
+      [{ profileLabel: "test" }],
+    ),
+    /official Google Apps Script/,
   );
 });

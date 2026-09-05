@@ -237,6 +237,34 @@ def _normalized_code(value: Any) -> str:
     return str(value or "").strip().upper().replace(" ", "_")
 
 
+def _normalized_facility_code(value: Any) -> str:
+    return re.sub(r"^SITE-", "", _normalized_code(value))
+
+
+def _normalized_address(value: Any) -> str:
+    normalized = re.sub(r"\bdr\.?\b", "drive", _normalized(value))
+    return re.sub(r"[^a-z0-9]+", " ", normalized).strip()
+
+
+def _facility_matches(opportunity: Opportunity, profile: Profile) -> bool:
+    facility = profile.facility_match
+    if facility is None:
+        return True
+    opportunity_sites = {
+        _normalized_facility_code(site_id) for site_id in opportunity.site_ids
+    }
+    site_matches = any(
+        _normalized_facility_code(site_id) in opportunity_sites
+        for site_id in facility.site_ids
+    )
+    address = _normalized_address(opportunity.site_address)
+    address_matches = any(
+        fragment and _normalized_address(fragment) in address
+        for fragment in facility.address_contains
+    )
+    return site_matches or address_matches
+
+
 def candidate_profiles(card: dict[str, Any], config: Config) -> list[Profile]:
     city = _normalized(card.get("city"))
     state = str(card.get("state") or "").strip().upper()
@@ -349,9 +377,7 @@ def match_opportunity_to_profile(
     )
     if profile.allowed_schedule_types and schedule_type_code not in profile.allowed_schedule_types:
         return None
-    if profile.required_site_ids and not set(profile.required_site_ids).intersection(
-        opportunity.site_ids
-    ):
+    if not _facility_matches(opportunity, profile):
         return None
 
     is_flexible = "FLEX" in schedule_type_code or "flexible shift" in _normalized(
@@ -359,7 +385,7 @@ def match_opportunity_to_profile(
     )
     preferred = schedule_type_code in profile.preferred_schedule_types
     if is_flexible:
-        if not config.day_shift_policy.allow_flexible_shifts:
+        if not profile.allow_flexible_shifts:
             return None
         other_days = (
             profile.other_job_availability.candidate_days
@@ -449,13 +475,23 @@ def build_opportunities(
                 site_ids=tuple(
                     dict.fromkeys(
                         _normalized_code(site_id)
-                        for value in (detail.get("siteId"), schedule.get("siteId"))
+                        for value in (
+                            detail.get("siteId"),
+                            detail.get("locationCode"),
+                            schedule.get("siteId"),
+                        )
                         for site_id in (value if isinstance(value, list) else [value])
                         if _normalized_code(site_id)
                     )
                 ),
-                site_address=str(detail.get("fullAddress") or schedule.get("address") or "").strip()
-                or None,
+                site_address=(
+                    " | ".join(
+                        str(value).strip()
+                        for value in (detail.get("fullAddress"), schedule.get("address"))
+                        if str(value or "").strip()
+                    )
+                    or None
+                ),
                 hours_per_week=float(schedule["hoursPerWeek"])
                 if isinstance(schedule.get("hoursPerWeek"), (int, float))
                 else None,

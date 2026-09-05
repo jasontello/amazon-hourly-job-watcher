@@ -242,6 +242,31 @@ function siteIdsFrom(...values) {
   return [...result];
 }
 
+function normalizedFacilityCode(value) {
+  return normalizedCode(value).replace(/^SITE-/, "");
+}
+
+function normalizedAddress(value) {
+  return normalized(value)
+    .replace(/\bdr\.?\b/g, "drive")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function facilityMatches(opportunity, profile) {
+  const facility = profile.facilityMatch;
+  if (!facility) return true;
+  const opportunitySites = new Set(opportunity.siteIds.map(normalizedFacilityCode));
+  const siteMatches = facility.siteIds
+    .map(normalizedFacilityCode)
+    .some((siteId) => siteId && opportunitySites.has(siteId));
+  const address = normalizedAddress(opportunity.siteAddress);
+  const addressMatches = facility.addressContains
+    .map(normalizedAddress)
+    .some((fragment) => fragment && address.includes(fragment));
+  return siteMatches || addressMatches;
+}
+
 export function parseScheduleText(scheduleText, policy = WATCH_CONFIG.dayShiftPolicy) {
   const text = String(scheduleText ?? "").replaceAll("\u202f", " ").trim();
   if (!text) return { valid: false, reason: "schedule text missing", days: [], segments: [] };
@@ -309,8 +334,13 @@ export function buildOpportunities(card, detail, schedules, detectedAt) {
       scheduleType: schedule.scheduleTypeL10N || schedule.scheduleType || "Not listed",
       scheduleTypeCode: normalizedCode(schedule.scheduleType),
       scheduleText: schedule.scheduleText || "Schedule details not listed",
-      siteIds: siteIdsFrom(detail.siteId || [], schedule.siteId || []),
-      siteAddress: detail.fullAddress || schedule.address || null,
+      siteIds: siteIdsFrom(
+        detail.siteId || [],
+        detail.locationCode || [],
+        schedule.siteId || [],
+      ),
+      siteAddress:
+        [detail.fullAddress, schedule.address].filter(Boolean).join(" | ") || null,
       hoursPerWeek:
         typeof schedule.hoursPerWeek === "number" ? schedule.hoursPerWeek : null,
       pay: typeof schedule.totalPayRate === "number" ? schedule.totalPayRate : null,
@@ -331,17 +361,11 @@ export function matchOpportunityToProfile(opportunity, profile, config = WATCH_C
   ) {
     return null;
   }
-  const opportunitySites = new Set(opportunity.siteIds.map(normalizedCode));
-  if (
-    profile.requiredSiteIds.length &&
-    !profile.requiredSiteIds.map(normalizedCode).some((siteId) => opportunitySites.has(siteId))
-  ) {
-    return null;
-  }
+  if (!facilityMatches(opportunity, profile)) return null;
 
   const isFlexible = scheduleTypeCode.includes("FLEX") || normalized(opportunity.scheduleText).includes("flexible shift");
   if (isFlexible) {
-    if (!config.dayShiftPolicy.allowFlexibleShifts) return null;
+    if (!profile.allowFlexibleShifts) return null;
     return {
       ...opportunity,
       profileId: profile.id,

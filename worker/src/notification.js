@@ -63,6 +63,116 @@ export function formatNotification(opportunities) {
   ].join("\n");
 }
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function formatEmailHtml(opportunities) {
+  const first = opportunities[0];
+  const schedules = opportunities
+    .map(
+      (opportunity) => `
+        <li style="margin-bottom:16px">
+          <strong>${escapeHtml(opportunity.scheduleType)}</strong><br>
+          ${escapeHtml(opportunity.scheduleText)}<br>
+          ${escapeHtml(opportunity.hoursPerWeek ?? "Not listed")} hrs/week ·
+          ${escapeHtml(opportunity.payDisplay)} · starts ${escapeHtml(opportunity.firstDay)}<br>
+          ${escapeHtml(opportunity.fitSummary)}<br>
+          <a href="${escapeHtml(directApplicationUrl(opportunity))}">Apply on Amazon</a>
+        </li>`,
+    )
+    .join("");
+  return `<!doctype html>
+    <html><body style="font-family:Arial,sans-serif;line-height:1.5;color:#17202a">
+      <p>Hi Kevin,</p>
+      <p>Jason asked me to alert you when a sleep-safe Amazon day shift appears near
+      3620 Ramos Drive in West Sacramento.</p>
+      <h2 style="margin-bottom:4px">${escapeHtml(first.title)}</h2>
+      <p style="margin-top:0">
+        <strong>Location:</strong> ${escapeHtml(first.siteAddress || first.location)}<br>
+        ${first.siteIds?.length ? `<strong>Site:</strong> ${escapeHtml(first.siteIds.join(", "))}<br>` : ""}
+        <strong>Employment:</strong> ${escapeHtml(
+          [...new Set(opportunities.map((item) => item.employmentType))].join(", "),
+        )}<br>
+        <strong>Posted by Amazon:</strong> ${escapeHtml(first.postedAt)}<br>
+        <strong>Detected:</strong> ${escapeHtml(formatDetectedAt(first.detectedAt))}
+      </p>
+      <ul style="padding-left:20px">${schedules}</ul>
+      <p>Positions can fill quickly. This watcher only sends alerts and never applies automatically.</p>
+    </body></html>`;
+}
+
+export function formatEmailPayload(opportunities, secret) {
+  if (!opportunities.length) throw new Error("At least one opportunity is required");
+  const first = opportunities[0];
+  return {
+    secret,
+    deliveryId: [
+      first.profileId,
+      first.jobId,
+      ...opportunities.map((item) => item.scheduleId).sort(),
+    ].join(":"),
+    subject: `[Amazon day shift] ${first.title} — West Sacramento`,
+    text: [
+      "Hi Kevin,",
+      "",
+      "Jason asked me to alert you when a sleep-safe Amazon day shift appears near " +
+        "3620 Ramos Drive in West Sacramento.",
+      "",
+      formatNotification(opportunities),
+      "",
+      "This watcher only sends alerts and never applies automatically.",
+    ].join("\n"),
+    html: formatEmailHtml(opportunities),
+  };
+}
+
+export async function sendEmail(env, opportunities) {
+  const webhookUrl = String(env.EMAIL_WEBHOOK_URL || "").trim();
+  const secret = String(env.EMAIL_WEBHOOK_SECRET || "").trim();
+  let parsed;
+  try {
+    parsed = new URL(webhookUrl);
+  } catch {
+    throw new Error("EMAIL_WEBHOOK_URL must be a valid Google Apps Script web-app URL");
+  }
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.hostname !== "script.google.com" ||
+    !/^\/macros\/s\/[^/]+\/exec$/.test(parsed.pathname)
+  ) {
+    throw new Error("EMAIL_WEBHOOK_URL must be an official Google Apps Script HTTPS web-app URL");
+  }
+  if (secret.length < 32) {
+    throw new Error("EMAIL_WEBHOOK_SECRET must contain at least 32 characters");
+  }
+  const response = await fetch(webhookUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(formatEmailPayload(opportunities, secret)),
+    redirect: "follow",
+    signal: AbortSignal.timeout(20_000),
+  });
+  const body = (await response.text()).slice(0, 2_000);
+  if (!response.ok) {
+    throw new Error(`Email bridge returned HTTP ${response.status}: ${body.slice(0, 500)}`);
+  }
+  let result;
+  try {
+    result = JSON.parse(body);
+  } catch {
+    throw new Error("Email bridge returned an invalid JSON response");
+  }
+  if (result?.ok !== true) {
+    throw new Error(`Email bridge rejected the message: ${String(result?.error || "unknown error")}`);
+  }
+}
+
 export async function sendNtfy(env, opportunities, preferred) {
   if (!env.NTFY_TOPIC) throw new Error("NTFY_TOPIC secret is not configured");
   const first = opportunities[0];
